@@ -13,7 +13,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Install prerequisites
+    - name: Install prerequisites with Chocolatey
       run: |
         choco install git -y
         choco install nodejs-lts -y
@@ -23,14 +23,13 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.3.1
 
-    - name: Build the solution
+    - name: Build ONLYOFFICE Community Server
       run: |
-        cd CommunityServer.sln
         msbuild CommunityServer.sln /p:Configuration=Release /p:Platform="Any CPU"
 
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v3
+    - name: Upload build output
+      uses: actions/upload-artifact@v4
       with:
         name: community-server-build
         path: |
-          ./bin
+          **/bin/Release/**
