@@ -31,7 +31,7 @@ jobs:
 
       - name: Restore NuGet packages
         run: |
-          nuget restore Studio.sln
+          dotnet restore Studio.sln
 
       - name: Build solution
         run: msbuild Studio.sln /p:Configuration=Release /p:Platform="Any CPU"
