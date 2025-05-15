@@ -24,7 +24,7 @@ jobs:
 
     - name: Build ONLYOFFICE Community Server
       run: |
-        msbuild CommunityServer.sln /p:Configuration=Release /p:Platform="Any CPU"
+        msbuild Studio.sln /p:Configuration=Release /p:Platform="Any CPU"
 
     - name: Upload build output
       uses: actions/upload-artifact@v4
