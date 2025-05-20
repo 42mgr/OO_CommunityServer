@@ -158,15 +158,6 @@ namespace ASC.Mail.Core.Dao
 
                     if (CRMSecurity.CanAccessTo(contact))
                     {
-                        contact.ContactInfos = new List<ContactInfo>
-                        {
-                            new ContactInfo
-                            {
-                                InfoType = ContactInfoType.Email,
-                                Data = row.Email
-                            }
-                        };
-
                         result.Add(contact);
                     }
                 }
