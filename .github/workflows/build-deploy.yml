@@ -1,4 +1,4 @@
-name: Build Community Server on Windows
+name: Build and Deploy
 
 on:
   push:
@@ -27,12 +27,12 @@ jobs:
       with:
         dotnet-version: '5.0'  # Adjust based on your framework version
 
-    - name: Restore NuGet packages
-      run: |
-        nuget restore Studio.sln  # Restores packages for the solution
+    #- name: Restore NuGet packages
+     # run: |
+   #     nuget restore Studio.sln  # Restores packages for the solution
 
-    - name: Clean solution
-      run: msbuild Studio.sln /t:Clean /p:Configuration=Release
+#    - name: Clean solution
+#      run: msbuild Studio.sln /t:Clean /p:Configuration=Release
 
     - name: Build solution
       run: build/BuildAndDeploy.sh
