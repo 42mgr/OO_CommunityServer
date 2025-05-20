@@ -26,10 +26,10 @@ jobs:
         dotnet-version: '5.0'
 
     - name: Build solution
-      run: build/Build.sh
+      run: msbuild build/msbuild/build.proj /flp:LogFile=Build.log
 
     - name: Build and deploy solution
-      run: build/BuildAndDeploy.sh
+      run: msbuild build/msbuild/deploy.proj /flp:LogFile=Deploy.log
 
     - name: Upload build output
       uses: actions/upload-artifact@v4
