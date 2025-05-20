@@ -17,9 +17,6 @@ jobs:
         node-version: 'lts/*'      # Use your required Node.js version
 
 
-    - name: Install dependencies
-      run: npm ci                 # Faster and more reliable than npm install
-
     - name: Setup MSBuild (uses pre-installed VS)
       uses: microsoft/setup-msbuild@v1.3.1
 
