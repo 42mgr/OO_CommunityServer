@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using MimeKit;
 
-namespace ASC.Mail.Core.Utils
+namespace ASC.Mail.Utils
 {
     public static class MailAddressHelper
     {
