@@ -26,7 +26,7 @@ jobs:
         dotnet-version: '5.0'
 
     - name: Build solution
-      run: build/BuildAndDeploy.sh
+      run: build/Build.sh
 
     - name: Build and deploy solution
       run: build/BuildAndDeploy.sh
