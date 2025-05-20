@@ -35,9 +35,8 @@ using ASC.Mail.Core.Dao.Expressions.Message;
 using ASC.Mail.Core.Dao.Interfaces;
 using ASC.Mail.Core.DbSchema.Tables;
 using ASC.Mail.Core.Entities;
-using ASC.Mail.Utils;
 using ASC.CRM.Core.Entities; // added
-// using ASC.Mail.Data.Contracts;
+using ASC.Mail.Data.Contracts;
 using ASC.Mail.Data.Search;
 using ASC.Mail.Data.Storage;
 using ASC.Mail.Enums;
