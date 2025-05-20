@@ -26,7 +26,6 @@ using ASC.Common.Logging;
 using ASC.Core;
 using ASC.CRM.Core;
 using ASC.CRM.Core.Entities;
-using ASC.Mail.Core.Entities;
 using ASC.Mail.Core.Dao.Interfaces;
 using ASC.Mail.Core.DbSchema.Tables;
 using ASC.Mail.Extensions;
