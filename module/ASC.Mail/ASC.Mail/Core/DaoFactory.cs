@@ -137,7 +137,7 @@ namespace ASC.Mail.Core
 
         public ICrmContactDao CreateGetContactsByEmails(int tenant, string user)
         {
-            return new GetContactsByEmails(DbManager, tenant, user);
+            return new CrmContactDao(DbManager, tenant, user);
         }
 
         public ICrmContactDao CreateCrmContactDao(int tenant, string user)
