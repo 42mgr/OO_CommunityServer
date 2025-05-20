@@ -35,6 +35,7 @@ using ASC.Mail.Core.Dao.Expressions.Message;
 using ASC.Mail.Core.Dao.Interfaces;
 using ASC.Mail.Core.DbSchema.Tables;
 using ASC.Mail.Core.Entities;
+using ASC.Mail.Core.Utils;
 using ASC.Mail.Data.Contracts;
 using ASC.Mail.Data.Search;
 using ASC.Mail.Data.Storage;
@@ -1171,10 +1172,11 @@ try
 
     // Collect all participant emails
     var allAddresses = new List<string>();
-    allAddresses.AddRange(MailUtil.GetEmailAddresses(message.From));
-    allAddresses.AddRange(MailUtil.GetEmailAddresses(message.To));
-    allAddresses.AddRange(MailUtil.GetEmailAddresses(message.Cc));
-    allAddresses.AddRange(MailUtil.GetEmailAddresses(message.Bcc));
+    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.From));
+    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.To));
+    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.Cc));
+    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.Bcc));
+
 
     // Deduplicate
     allAddresses = allAddresses

@@ -157,7 +157,7 @@ namespace ASC.Mail.Core.Dao
 
                     if (CRMSecurity.CanAccessTo(contact))
                     {
-                        contact.ContactData = new List<ContactInfo>
+                        contact.ContactInfo = new List<ContactInfo>
                         {
                             new ContactInfo
                             {
