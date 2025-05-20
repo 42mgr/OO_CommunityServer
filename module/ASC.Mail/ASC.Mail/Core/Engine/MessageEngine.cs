@@ -1191,7 +1191,7 @@ try
         var crmContactData = matchedContacts.Select(c => new CrmContactData
         {
             Id = c.ID,
-            Type = CrmContactData.EntityType.Contact
+            Type = CrmContactData.EntityTypes.Contact
             }).ToList();
 
         crmLinkEngine.LinkChainToCrm(mailId,crmContactData, "http"); // or https 
