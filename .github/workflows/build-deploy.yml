@@ -1,0 +1,45 @@
+name: Build Community Server on Windows
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install prerequisites with Chocolatey
+      run: |
+        choco install git -y
+        choco install nodejs-lts -y
+        choco install visualstudio2019buildtools --package-parameters "--add Microsoft.Net.Component.4.7.2.SDK --add Microsoft.Net.Component.4.7.2.TargetingPack --includeRecommended --includeOptional" -y
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.3.1
+
+    - name: Set up .NET SDK (for dependencies)
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '5.0'  # Adjust based on your framework version
+
+    - name: Restore NuGet packages
+      run: |
+        nuget restore Studio.sln  # Restores packages for the solution
+
+    - name: Clean solution
+      run: msbuild Studio.sln /t:Clean /p:Configuration=Release
+
+    - name: Build solution
+      run: build/BuildAndDeploy.sh
+
+    - name: Upload build output
+      uses: actions/upload-artifact@v4
+      with:
+        name: community-server-build
+        path: |
+          **/bin/Release/**
