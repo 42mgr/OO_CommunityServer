@@ -113,5 +113,71 @@ namespace ASC.Mail.Core.Dao
 
             return ids;
         }
+
+        public List<Contact> GetContactsByEmails(List<string> emails)
+        {
+            var result = new List<Contact>();
+
+            if (emails == null || !emails.Any())
+                return result;
+
+            try
+            {
+                var q = new SqlQuery(CrmContactTable.TABLE_NAME.Alias(CC_ALIAS))
+                    .Select(CrmContactTable.Columns.Id.Prefix(CC_ALIAS),
+                            CrmContactTable.Columns.IsCompany.Prefix(CC_ALIAS),
+                            CrmContactTable.Columns.IsShared.Prefix(CC_ALIAS),
+                            CrmContactInfoTable.Columns.Data.Prefix(CCI_ALIAS))
+                    .InnerJoin(CrmContactInfoTable.TABLE_NAME.Alias(CCI_ALIAS),
+                        Exp.EqColumns(CrmContactTable.Columns.Tenant.Prefix(CC_ALIAS),
+                                      CrmContactInfoTable.Columns.Tenant.Prefix(CCI_ALIAS)) &
+                        Exp.EqColumns(CrmContactTable.Columns.Id.Prefix(CC_ALIAS),
+                                      CrmContactInfoTable.Columns.ContactId.Prefix(CCI_ALIAS)))
+                    .Where(CrmContactTable.Columns.Tenant.Prefix(CC_ALIAS), Tenant)
+                    .Where(CrmContactInfoTable.Columns.Type.Prefix(CCI_ALIAS), (int)ContactInfoType.Email)
+                    .Where(Exp.In(CrmContactInfoTable.Columns.Data.Prefix(CCI_ALIAS), emails));
+
+                var contactList = Db.ExecuteList(q)
+                    .ConvertAll(r => new
+                    {
+                        Id = Convert.ToInt32(r[0]),
+                        IsCompany = Convert.ToBoolean(r[1]),
+                        ShareType = (ShareType)Convert.ToInt32(r[2]),
+                        Email = r[3].ToString()
+                    });
+
+                CoreContext.TenantManager.SetCurrentTenant(Tenant);
+                SecurityContext.CurrentUser = new Guid(CurrentUserId);
+
+                foreach (var row in contactList)
+                {
+                    var contact = row.IsCompany ? new Company() : new Person();
+                    contact.ID = row.Id;
+                    contact.ShareType = row.ShareType;
+
+                    if (CRMSecurity.CanAccessTo(contact))
+                    {
+                        contact.ContactData = new List<ContactInfo>
+                        {
+                            new ContactInfo
+                            {
+                                InfoType = ContactInfoType.Email,
+                                Data = row.Email
+                            }
+                        };
+
+                        result.Add(contact);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.WarnFormat("GetContactsByEmails(tenantId='{0}', userId='{1}') Exception:\r\n{2}\r\n",
+                    Tenant, CurrentUserId, ex.ToString());
+            }
+
+            return result;
+        }
+
     }
 }

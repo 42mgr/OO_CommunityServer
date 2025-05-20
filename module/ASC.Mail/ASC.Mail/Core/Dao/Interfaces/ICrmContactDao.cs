@@ -22,5 +22,6 @@ namespace ASC.Mail.Core.Dao.Interfaces
     public interface ICrmContactDao
     {
         List<int> GetCrmContactIds(string email);
+        List<int> GetContactsByEmails(List<string> emails);
     }
 }
