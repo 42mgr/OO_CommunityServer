@@ -151,7 +151,8 @@ namespace ASC.Mail.Core.Dao
 
                 foreach (var row in contactList)
                 {
-                    Contact contact = row.IsCompany ? (Contact)new Company() : new Person();
+                    ASC.CRM.Core.Entities.Contact contact = row.IsCompany ? (ASC.CRM.Core.Entities.Contact)(new ASC.CRM.Core.Entities.Company()) : new ASC.CRM.Core.Entities.Person();
+
                     contact.ID = row.Id;
                     contact.ShareType = row.ShareType;
 

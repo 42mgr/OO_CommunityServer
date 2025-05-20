@@ -433,6 +433,8 @@
     <Compile Include="Utils\MailUtil.cs" />
     <Compile Include="Utils\MimeTypeMap.cs" />
     <Compile Include="Utils\Parser.cs" />
+    <Compile Include="Utils\MailAddressHelper.cs" />
+
   </ItemGroup>
   <ItemGroup>
     <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
