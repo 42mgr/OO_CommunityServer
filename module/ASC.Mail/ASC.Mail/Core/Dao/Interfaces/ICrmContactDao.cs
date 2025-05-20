@@ -16,6 +16,7 @@
 
 
 using System.Collections.Generic;
+using ASC.Mail.Core.Entities;
 
 namespace ASC.Mail.Core.Dao.Interfaces
 {
