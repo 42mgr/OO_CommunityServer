@@ -1,13 +1,11 @@
 name: Build and Package ASC Deb
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   build:
     runs-on: windows-latest
-    outputs:
-      artifact-name: ${{ steps.upload.outputs.artifact }}
 
     steps:
       - uses: actions/checkout@v3
@@ -26,12 +24,13 @@ jobs:
       - name: Deploy solution
         run: msbuild build/msbuild/deploy.proj /p:Configuration=Release
 
-      - name: Zip DLLs
+      - name: Zip DLLs and config files
+        shell: pwsh
         run: |
-          Compress-Archive -Path **\bin\Release\* -DestinationPath build-output.zip
+          $files = Get-ChildItem -Recurse -Include *.dll,*.config -File | Where-Object { $_.FullName -like '*\bin\Release\*' }
+          Compress-Archive -Path $files.FullName -DestinationPath build-output.zip
 
       - name: Upload DLLs
-        id: upload
         uses: actions/upload-artifact@v4
         with:
           name: community-server-build
@@ -52,18 +51,18 @@ jobs:
       - name: Unzip DLLs
         run: unzip build-output.zip -d modules
 
+      - name: Download external DEB if not cached
+        if: steps.cache-deb.outputs.cache-hit != 'true'
+        run: |
+          chmod +x ./build-scripts/download-deb.sh
+          ./build-scripts/download-deb.sh
+          
       - name: Cache external DEB
         id: cache-deb
         uses: actions/cache@v3
         with:
           path: onlyoffice-desktopeditors.deb
           key: onlyoffice-deb-squeeze-v1
-
-      - name: Download external DEB if not cached
-        if: steps.cache-deb.outputs.cache-hit != 'true'
-        run: |
-          chmod +x ./build-scripts/download-deb.sh
-          ./build-scripts/download-deb.sh
 
       - name: Extract .deb
         run: |
@@ -79,4 +78,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rebuilt-deb
-          path: onlyoffice-desktopeditors_8.9.0.999_amd64.deb
+          path: onlyoffice-desktopeditors_*.deb
