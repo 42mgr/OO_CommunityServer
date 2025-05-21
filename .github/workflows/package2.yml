@@ -1,0 +1,61 @@
+name: Package ASC Deb2
+
+on:
+  workflow_run:
+    workflows: ["Build ASC"]
+    types:
+      - completed
+  workflow_dispatch:  # Add manual trigger
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  package:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download Windows build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: community-server-build
+          path: build-output
+
+      - name: Clean modules directory
+        run: rm -rf modules
+
+      - name: Unzip DLLs
+        run: unzip -o build-output/build-output.zip -d modules
+
+      - name: Cache external DEB
+        id: cache-deb
+        uses: actions/cache@v3
+        with:
+          path: onlyoffice-desktopeditors.deb
+          key: onlyoffice-deb-squeeze-v1
+
+      - name: Download external DEB if not cached
+        if: steps.cache-deb.outputs.cache-hit != 'true'
+        run: |
+          chmod +x ./.github/build-scripts/download-deb.sh
+          ./.github/build-scripts/download-deb.sh
+
+      - name: Extract .deb
+        run: |
+          chmod +x ./.github/build-scripts/extract-deb.sh
+          ./.github/build-scripts/extract-deb.sh onlyoffice-desktopeditors.deb
+
+      - name: Build custom .deb
+        run: |
+          chmod +x ./.github/build-scripts/build-custom-deb.sh
+          ./.github/build-scripts/build-custom-deb.sh extracted-onlyoffice-desktopeditors modules
+
+      - name: Upload rebuilt .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-deb
+          path: onlyoffice-desktopeditors_*.deb
