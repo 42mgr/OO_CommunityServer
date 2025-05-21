@@ -1,0 +1,37 @@
+name: Build ASC
+
+on:
+  workflow_dispatch:  # Manual trigger, or add push triggers if needed
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '5.0'
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1.3.1
+
+      - name: Build solution
+        run: msbuild build/msbuild/build.proj /p:Configuration=Release
+
+      - name: Deploy solution
+        run: msbuild build/msbuild/deploy.proj /p:Configuration=Release
+
+      - name: Zip DLLs and config files
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -Include *.dll,*.config -File | Where-Object { $_.FullName -like '*\bin\Release\*' }
+          Compress-Archive -Path $files.FullName -DestinationPath build-output.zip
+
+      - name: Upload DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-server-build
+          path: build-output.zip
