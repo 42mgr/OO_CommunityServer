@@ -49,10 +49,10 @@ jobs:
           name: community-server-build
           
       - name: Clean modules directory
-          run: rm -rf modules
+        run: rm -rf modules
 
       - name: Unzip DLLs
-          run: unzip -o build-output.zip -d modules
+        run: unzip -o build-output.zip -d modules
           
       - name: Download external DEB if not cached
         if: steps.cache-deb.outputs.cache-hit != 'true'
