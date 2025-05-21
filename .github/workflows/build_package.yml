@@ -47,10 +47,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: community-server-build
+          
+      - name: Clean modules directory
+          run: rm -rf modules
 
       - name: Unzip DLLs
-        run: unzip build-output.zip -d modules
-
+          run: unzip -o build-output.zip -d modules
+          
       - name: Download external DEB if not cached
         if: steps.cache-deb.outputs.cache-hit != 'true'
         run: |
