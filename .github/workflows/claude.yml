@@ -33,16 +33,24 @@ jobs:
         sudo apt-get install -y wget curl jq file dpkg-dev
         
         echo "✅ All dependencies ready"
-        echo "Tool versions:"
-        wget --version | head -1
-        curl --version | head -1  
-        jq --version
-        file --version | head -1
+        
+    - name: Check if DEB already exists
+      id: check-deb
+      run: |
+        if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
+          echo "deb_exists=true" >> $GITHUB_OUTPUT
+          echo "✅ OnlyOffice DEB file already exists"
+          dpkg-deb --info onlyoffice-communityserver.deb | head -10
+          echo "📦 Existing package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
+        else
+          echo "deb_exists=false" >> $GITHUB_OUTPUT
+          echo "❌ OnlyOffice DEB file not found or empty"
+        fi
         
     - name: Download official OnlyOffice package
-      if: steps.cache-deb.outputs.cache-hit != 'true'
+      if: steps.check-deb.outputs.deb_exists != 'true'
       run: |
-        echo "Cache miss - downloading OnlyOffice package..."
+        echo "Downloading OnlyOffice package..."
         
         if [ -f ".github/build-scripts/download-deb.sh" ]; then
           chmod +x .github/build-scripts/download-deb.sh
@@ -50,7 +58,7 @@ jobs:
           
           if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
             echo "✅ Successfully downloaded OnlyOffice package"
-            dpkg-deb --info onlyoffice-communityserver.deb
+            dpkg-deb --info onlyoffice-communityserver.deb | head -10
             echo "📦 Package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
           else
             echo "❌ Download failed"
@@ -58,18 +66,6 @@ jobs:
           fi
         else
           echo "❌ Custom download script not found"
-          exit 1
-        fi
-        
-    - name: Verify cached package
-      if: steps.cache-deb.outputs.cache-hit == 'true'
-      run: |
-        echo "✅ Using cached OnlyOffice package"
-        if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
-          dpkg-deb --info onlyoffice-communityserver.deb
-          echo "📦 Cached package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
-        else
-          echo "❌ Cached package is invalid"
           exit 1
         fi
         
@@ -81,7 +77,6 @@ jobs:
         
         echo "Looking for existing mail module assemblies..."
         find ./official-package -name "ASC.Mail*" -type f || echo "No ASC.Mail files found"
-        find ./official-package -name "ASC.Core*" -type f | head -5 || echo "No ASC.Core files found"
         
     - name: Upload extracted package
       uses: actions/upload-artifact@v4
@@ -120,221 +115,264 @@ jobs:
       with:
         name: extracted-onlyoffice-package
         
-    - name: Fix ALL project configurations before build
+    - name: Fix ALL project configurations comprehensively
       shell: pwsh
       run: |
-        Write-Host "Fixing MSBuild project configurations..."
+        Write-Host "Fixing ALL MSBuild project configurations comprehensively..."
         
-        # Find ALL .csproj files, not just Mail.Server ones
+        # Find ALL .csproj files in the entire repository
         $allProjects = Get-ChildItem -Path "." -Name "*.csproj" -Recurse
         
-        Write-Host "Found $($allProjects.Count) project files to check"
+        Write-Host "Found $($allProjects.Count) project files to fix"
         
         foreach ($proj in $allProjects) {
-          Write-Host "Checking project: $proj"
+          Write-Host "Processing project: $proj"
           
           if (Test-Path $proj) {
             $content = Get-Content $proj -Raw
             $modified = $false
             
-            # Check if project has Release|Any CPU configuration
+            # Fix missing Release|Any CPU configuration
             if ($content -notmatch 'Release.*Any CPU') {
-              Write-Host "Adding Release configuration to $proj"
+              Write-Host "  Adding Release|Any CPU configuration"
               
-              # Create the XML configuration piece by piece to avoid YAML issues
-              $condition = 'Configuration)|$(Platform'
-              $releaseXml = "  <PropertyGroup Condition=`"'`$($condition)' == 'Release|Any CPU'`">"
-              $releaseXml += "`n    <OutputPath>bin\Release\</OutputPath>"
-              $releaseXml += "`n    <DebugType>pdbonly</DebugType>"
-              $releaseXml += "`n    <Optimize>true</Optimize>"
-              $releaseXml += "`n    <PlatformTarget>AnyCPU</PlatformTarget>"
-              $releaseXml += "`n    <WarningLevel>1</WarningLevel>"
-              $releaseXml += "`n    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>"
-              $releaseXml += "`n  </PropertyGroup>"
+              $releaseXml = "  <PropertyGroup Condition=`"'`$(Configuration)|`$(Platform)' == 'Release|Any CPU'`">`n"
+              $releaseXml += "    <OutputPath>bin\Release\</OutputPath>`n"
+              $releaseXml += "    <DebugType>pdbonly</DebugType>`n"
+              $releaseXml += "    <Optimize>true</Optimize>`n"
+              $releaseXml += "    <PlatformTarget>AnyCPU</PlatformTarget>`n"
+              $releaseXml += "    <WarningLevel>1</WarningLevel>`n"
+              $releaseXml += "    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>`n"
+              $releaseXml += "  </PropertyGroup>"
               
-              # Insert before closing Project tag
               $content = $content -replace '</Project>', ($releaseXml + "`n</Project>")
               $modified = $true
             }
             
-            # Check if project has Debug|Any CPU configuration
+            # Fix missing Debug|Any CPU configuration
             if ($content -notmatch 'Debug.*Any CPU') {
-              Write-Host "Adding Debug configuration to $proj"
+              Write-Host "  Adding Debug|Any CPU configuration"
               
-              $condition = 'Configuration)|$(Platform'
-              $debugXml = "  <PropertyGroup Condition=`"'`$($condition)' == 'Debug|Any CPU'`">"
-              $debugXml += "`n    <OutputPath>bin\Debug\</OutputPath>"
-              $debugXml += "`n    <DebugSymbols>true</DebugSymbols>"
-              $debugXml += "`n    <DebugType>full</DebugType>"
-              $debugXml += "`n    <Optimize>false</Optimize>"
-              $debugXml += "`n    <PlatformTarget>AnyCPU</PlatformTarget>"
-              $debugXml += "`n    <WarningLevel>1</WarningLevel>"
-              $debugXml += "`n    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>"
-              $debugXml += "`n  </PropertyGroup>"
+              $debugXml = "  <PropertyGroup Condition=`"'`$(Configuration)|`$(Platform)' == 'Debug|Any CPU'`">`n"
+              $debugXml += "    <OutputPath>bin\Debug\</OutputPath>`n"
+              $debugXml += "    <DebugSymbols>true</DebugSymbols>`n"
+              $debugXml += "    <DebugType>full</DebugType>`n"
+              $debugXml += "    <Optimize>false</Optimize>`n"
+              $debugXml += "    <PlatformTarget>AnyCPU</PlatformTarget>`n"
+              $debugXml += "    <WarningLevel>1</WarningLevel>`n"
+              $debugXml += "    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>`n"
+              $debugXml += "  </PropertyGroup>"
               
-              # Insert before closing Project tag
               $content = $content -replace '</Project>', ($debugXml + "`n</Project>")
+              $modified = $true
+            }
+            
+            # Ensure proper Platform configuration exists
+            if ($content -notmatch '<Platform.*>AnyCPU</Platform>') {
+              Write-Host "  Adding Platform configuration"
+              
+              $platformXml = "  <PropertyGroup>`n    <Platform Condition=`"`$(Platform) == ''`">AnyCPU</Platform>`n  </PropertyGroup>"
+              $content = $content -replace '</Project>', ($platformXml + "`n</Project>")
               $modified = $true
             }
             
             if ($modified) {
               Set-Content -Path $proj -Value $content -Encoding UTF8
-              Write-Host "✅ Fixed configurations for $proj"
+              Write-Host "  ✅ Fixed $proj"
             } else {
-              Write-Host "✅ $proj already has proper configurations"
+              Write-Host "  ✅ $proj already properly configured"
             }
           }
         }
         
-        # Create Directory.Build.props for global fallback settings
-        $buildPropsXml = "<Project>"
-        $buildPropsXml += "`n  <PropertyGroup>"
-        $buildPropsXml += "`n    <Platform Condition=`"`$(Platform) == ''`">AnyCPU</Platform>"
-        $buildPropsXml += "`n    <Configuration Condition=`"`$(Configuration) == ''`">Release</Configuration>"
-        $buildPropsXml += "`n    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>"
-        $buildPropsXml += "`n    <WarningLevel>1</WarningLevel>"
-        $buildPropsXml += "`n  </PropertyGroup>"
-        $buildPropsXml += "`n</Project>"
+        # Create comprehensive Directory.Build.props
+        $buildPropsXml = @"
+        <Project>
+          <PropertyGroup>
+            <Platform Condition="`$(Platform) == ''">AnyCPU</Platform>
+            <Configuration Condition="`$(Configuration) == ''">Release</Configuration>
+            <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+            <WarningLevel>1</WarningLevel>
+            <OutputPath Condition="`$(OutputPath) == ''">bin\`$(Configuration)\</OutputPath>
+          </PropertyGroup>
+          
+          <!-- Default configurations for all projects -->
+          <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Release|AnyCPU'">
+            <OutputPath>bin\Release\</OutputPath>
+            <DebugType>pdbonly</DebugType>
+            <Optimize>true</Optimize>
+          </PropertyGroup>
+          
+          <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Debug|AnyCPU'">
+            <OutputPath>bin\Debug\</OutputPath>
+            <DebugSymbols>true</DebugSymbols>
+            <DebugType>full</DebugType>
+            <Optimize>false</Optimize>
+          </PropertyGroup>
+        </Project>
+        "@
         
         Set-Content -Path "Directory.Build.props" -Value $buildPropsXml -Encoding UTF8
-        Write-Host "✅ Created Directory.Build.props"
+        Write-Host "✅ Created comprehensive Directory.Build.props"
         
-    - name: Restore NuGet packages
+    - name: Restore NuGet packages comprehensively
       shell: pwsh
       run: |
-        Write-Host "Restoring NuGet packages..."
+        Write-Host "Restoring NuGet packages comprehensively..."
         
-        # Find and restore solution files first
+        # First, try to restore any solution files
         $slnFiles = Get-ChildItem -Name "*.sln" -Recurse
         
         if ($slnFiles) {
           foreach ($sln in $slnFiles) {
             Write-Host "Restoring packages for solution: $sln"
             try {
-              nuget restore $sln -Verbosity normal -NonInteractive
+              nuget restore $sln -Verbosity normal -NonInteractive -Force
+              Write-Host "✅ Successfully restored $sln"
             } catch {
-              Write-Host "Warning: Failed to restore $sln - $($_.Exception.Message)"
+              Write-Host "⚠️ Warning: Failed to restore $sln - $($_.Exception.Message)"
             }
           }
+        } else {
+          Write-Host "No solution files found"
         }
         
-        # Also restore packages for mail module specifically
-        if (Test-Path "module/ASC.Mail/ASC.Mail/packages.config") {
-          Write-Host "Restoring packages for ASC.Mail module..."
-          Set-Location "module/ASC.Mail/ASC.Mail"
+        # Restore packages for individual projects that have packages.config
+        $packagesConfigs = Get-ChildItem -Name "packages.config" -Recurse
+        
+        foreach ($pkgConfig in $packagesConfigs) {
+          $projectDir = Split-Path $pkgConfig -Parent
+          Write-Host "Restoring packages for: $projectDir"
+          
           try {
-            nuget restore packages.config -PackagesDirectory ../../../packages -Verbosity normal -NonInteractive
+            Set-Location $projectDir
+            nuget restore packages.config -PackagesDirectory "../../packages" -Verbosity normal -Force
+            Set-Location $env:GITHUB_WORKSPACE
           } catch {
-            Write-Host "Warning: Failed to restore mail module packages - $($_.Exception.Message)"
+            Write-Host "⚠️ Warning: Failed to restore packages for $projectDir"
+            Set-Location $env:GITHUB_WORKSPACE
           }
-          Set-Location "../../.."
         }
         
-    - name: Build mail module with comprehensive approach
+    - name: Build dependencies first, then mail module
       shell: pwsh
       run: |
-        Write-Host "Building ASC.Mail module..."
+        Write-Host "Building dependencies first, then mail module..."
         
-        # Try building the entire solution first if available
-        $mailSolutions = Get-ChildItem -Name "*.sln" -Recurse | Where-Object { $_ -like "*Mail*" }
+        # Build order: common projects first, then mail module
+        $buildOrder = @(
+          "common/ASC.Common/ASC.Common.csproj",
+          "common/ASC.Core.Common/ASC.Core.Common.csproj", 
+          "common/ASC.Data.Storage/ASC.Data.Storage.csproj",
+          "web/core/ASC.Web.Core/ASC.Web.Core.csproj",
+          "module/ASC.Api/ASC.Api/ASC.Api.Core.csproj",
+          "module/ASC.Api/ASC.Specific/ASC.Specific.csproj",
+          "module/ASC.ElasticSearch/ASC.ElasticSearch.csproj",
+          "module/ASC.Mail.Server/ASC.Mail.Server/ASC.Mail.Server.csproj",
+          "module/ASC.Thrdparty/ASC.FederatedLogin/ASC.FederatedLogin.csproj",
+          "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
+        )
         
-        if ($mailSolutions) {
-          $sln = $mailSolutions[0]
-          Write-Host "Attempting to build solution: $sln"
-          
-          try {
-            msbuild $sln `
-              /p:Configuration=Release `
-              /p:Platform="Any CPU" `
-              /p:TreatWarningsAsErrors=false `
-              /p:WarningLevel=1 `
-              /verbosity:normal `
-              /maxcpucount `
-              /nologo
-              
-            Write-Host "✅ Solution build completed"
-          } catch {
-            Write-Host "⚠️ Solution build had issues: $($_.Exception.Message)"
-          }
-        }
+        $successfulBuilds = @()
+        $failedBuilds = @()
         
-        # Build the specific ASC.Mail project
-        if (Test-Path "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj") {
-          Set-Location "module/ASC.Mail/ASC.Mail"
-          
-          Write-Host "Building ASC.Mail project..."
-          try {
-            msbuild ASC.Mail.csproj `
-              /p:Configuration=Release `
-              /p:Platform="Any CPU" `
-              /p:TreatWarningsAsErrors=false `
-              /p:WarningLevel=1 `
-              /p:OutputPath="bin\Release\" `
-              /verbosity:normal `
-              /nologo
-              
-            if (Test-Path "bin/Release/ASC.Mail.dll") {
-              Write-Host "✅ Successfully built ASC.Mail.dll"
-              Get-ChildItem bin/Release/ | Select-Object Name, Length, LastWriteTime
-            } else {
-              Write-Host "❌ ASC.Mail.dll not found after build"
-            }
-          } catch {
-            Write-Host "❌ Build failed: $($_.Exception.Message)"
-          }
-          
-          Set-Location "../../.."
-        } else {
-          Write-Host "❌ ASC.Mail.csproj not found at expected location"
-        }
-        
-        # Try to build any other mail-related projects
-        $otherMailProjects = Get-ChildItem -Name "*.csproj" -Recurse | Where-Object { $_ -like "*Mail*" }
-        
-        foreach ($mailProj in $otherMailProjects) {
-          if ($mailProj -notlike "*ASC.Mail.csproj") {
-            Write-Host "Attempting to build additional mail project: $mailProj"
+        foreach ($project in $buildOrder) {
+          if (Test-Path $project) {
+            Write-Host "`n=== Building: $project ==="
+            
             try {
-              msbuild $mailProj `
+              msbuild $project `
                 /p:Configuration=Release `
                 /p:Platform="Any CPU" `
                 /p:TreatWarningsAsErrors=false `
                 /p:WarningLevel=1 `
                 /verbosity:minimal `
                 /nologo
+                
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Successfully built $project"
+                $successfulBuilds += $project
+              } else {
+                Write-Host "❌ Failed to build $project (exit code: $LASTEXITCODE)"
+                $failedBuilds += $project
+              }
             } catch {
-              Write-Host "Warning: Failed to build $mailProj - $($_.Exception.Message)"
+              Write-Host "❌ Exception building $project`: $($_.Exception.Message)"
+              $failedBuilds += $project
             }
+          } else {
+            Write-Host "⚠️ Project not found: $project"
           }
         }
         
-    - name: Collect build outputs
+        Write-Host "`n=== Build Summary ==="
+        Write-Host "Successful builds ($($successfulBuilds.Count)):"
+        foreach ($success in $successfulBuilds) {
+          Write-Host "  ✅ $success"
+        }
+        
+        Write-Host "Failed builds ($($failedBuilds.Count)):"
+        foreach ($failed in $failedBuilds) {
+          Write-Host "  ❌ $failed"
+        }
+        
+        # Check if our main target (ASC.Mail) was built successfully
+        if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
+          Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built successfully!"
+          Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
+        } else {
+          Write-Host "`n❌ FAILED: ASC.Mail.dll was not built"
+          
+          # Try building just the mail module with more verbose output
+          Write-Host "`nAttempting verbose build of mail module..."
+          Set-Location "module/ASC.Mail/ASC.Mail"
+          
+          msbuild ASC.Mail.csproj `
+            /p:Configuration=Release `
+            /p:Platform="Any CPU" `
+            /p:TreatWarningsAsErrors=false `
+            /verbosity:detailed
+            
+          Set-Location $env:GITHUB_WORKSPACE
+        }
+        
+    - name: Collect comprehensive build outputs
       shell: pwsh
       run: |
         Write-Host "Collecting all build outputs..."
         
-        # Find all built DLLs
-        $allDlls = Get-ChildItem -Name "*.dll" -Recurse | Where-Object { $_ -like "*Mail*" }
-        
-        if ($allDlls) {
-          Write-Host "Found built DLLs:"
-          foreach ($dll in $allDlls) {
-            $fullPath = Resolve-Path $dll
-            $fileInfo = Get-Item $fullPath
-            Write-Host "  $dll - $($fileInfo.Length) bytes - $($fileInfo.LastWriteTime)"
-          }
-        } else {
-          Write-Host "⚠️ No Mail-related DLLs found"
+        # Find all DLLs that were built
+        $allBuiltDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { 
+          $fullPath = Resolve-Path $_
+          $dir = Split-Path $fullPath -Parent
+          $dir -like "*bin*Release*" -or $dir -like "*bin*Debug*"
         }
         
-        # Create a summary of what was built
-        $buildSummary = "Build completed at $(Get-Date)`n"
-        $buildSummary += "Built assemblies:`n"
-        foreach ($dll in $allDlls) {
-          $buildSummary += "- $dll`n"
+        Write-Host "Found $($allBuiltDlls.Count) built DLL files:"
+        foreach ($dll in $allBuiltDlls) {
+          $fullPath = Resolve-Path $dll
+          $fileInfo = Get-Item $fullPath
+          Write-Host "  📦 $dll - $($fileInfo.Length) bytes - $($fileInfo.LastWriteTime)"
         }
         
-        Set-Content -Path "build-summary.txt" -Value $buildSummary
+        # Create build report
+        $buildReport = @"
+        # Build Report - $(Get-Date)
+        
+        ## Build Summary
+        - Total DLLs found: $($allBuiltDlls.Count)
+        - ASC.Mail.dll built: $(Test-Path 'module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll')
+        
+        ## Built Assemblies
+        $($allBuiltDlls | ForEach-Object { "- $_" } | Out-String)
+        
+        ## Key Files Status
+        - ASC.Mail.dll: $(if (Test-Path 'module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll') { '✅ FOUND' } else { '❌ MISSING' })
+        - ASC.Common.dll: $(if (Get-ChildItem -Name 'ASC.Common.dll' -Recurse) { '✅ FOUND' } else { '❌ MISSING' })
+        - ASC.Core.Common.dll: $(if (Get-ChildItem -Name 'ASC.Core.Common.dll' -Recurse) { '✅ FOUND' } else { '❌ MISSING' })
+        "@
+        
+        Set-Content -Path "build-report.md" -Value $buildReport -Encoding UTF8
         
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -344,8 +382,10 @@ jobs:
         path: |
           module/ASC.Mail/ASC.Mail/bin/
           module/ASC.Mail/ASC.Mail/obj/
-          **/bin/Release/*.dll
-          build-summary.txt
+          common/*/bin/Release/*.dll
+          web/*/bin/Release/*.dll
+          module/*/bin/Release/*.dll
+          build-report.md
         retention-days: 3
 
   create-custom-package:
@@ -371,44 +411,54 @@ jobs:
         name: built-mail-module-${{ github.run_number }}
         path: build-output/
         
-    - name: Create custom package
+    - name: Create custom package with comprehensive integration
       run: |
         echo "Creating custom package with mail module changes..."
         
         mkdir -p custom-package
         cp -r official-package/* custom-package/
         
-        # Check if we have compiled DLLs
-        echo "Looking for compiled mail module DLLs..."
-        find build-output/ -name "*.dll" -type f | head -10
-        
-        if [ -f "build-output/module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" ]; then
-          echo "✅ Found compiled ASC.Mail.dll"
-          
-          # Find existing ASC.Mail.dll in the official package
-          mail_dll_location=$(find ./custom-package -name "ASC.Mail.dll" -type f | head -1)
-          
-          if [ -n "$mail_dll_location" ]; then
-            echo "Replacing ASC.Mail.dll at: $mail_dll_location"
-            cp build-output/module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll "$mail_dll_location"
-            
-            # Copy any additional mail-related DLLs
-            find build-output/ -name "*Mail*.dll" -type f -exec cp {} "$(dirname "$mail_dll_location")/" \; 2>/dev/null || true
-            echo "✅ Updated mail module with compiled version"
-          else
-            echo "Creating new location for mail DLLs"
-            mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/bin/
-            find build-output/ -name "*Mail*.dll" -type f -exec cp {} ./custom-package/opt/onlyoffice/CommunityServer/bin/ \; 2>/dev/null || true
-          fi
-        else
-          echo "⚠️ No compiled DLL found - package will use original mail module"
+        # Display build report if available
+        if [ -f "build-output/build-report.md" ]; then
+          echo "=== Build Report ==="
+          cat build-output/build-report.md
+          echo "===================="
         fi
         
-        # Always include source files for transparency and documentation
-        echo "Including modified source files..."
+        # Look for built DLLs
+        echo "Looking for built assemblies..."
+        find build-output/ -name "*.dll" -type f | head -20
+        
+        # Check if we have the main ASC.Mail.dll
+        if [ -f "build-output/module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" ]; then
+          echo "✅ Found compiled ASC.Mail.dll - integrating into package"
+          
+          # Find where mail assemblies should go in the official package
+          mail_bin_locations=$(find ./custom-package -name "*.dll" -path "*Mail*" -type f | head -5)
+          
+          if [ -n "$mail_bin_locations" ]; then
+            # Get the directory where mail DLLs should be placed
+            mail_bin_dir=$(dirname "$(echo "$mail_bin_locations" | head -1)")
+            echo "Installing compiled mail module to: $mail_bin_dir"
+            
+            # Copy all built DLLs to the appropriate location
+            find build-output/ -name "*.dll" -type f -exec cp {} "$mail_bin_dir/" \; 2>/dev/null || true
+            
+            echo "✅ Integrated compiled mail module assemblies"
+          else
+            echo "Creating new bin directory for compiled assemblies"
+            mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/bin/
+            find build-output/ -name "*.dll" -type f -exec cp {} ./custom-package/opt/onlyoffice/CommunityServer/bin/ \; 2>/dev/null || true
+          fi
+        else
+          echo "⚠️ No compiled ASC.Mail.dll found - using source-only package"
+        fi
+        
+        # Always include source files and documentation
+        echo "Including custom source files and documentation..."
         mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
         
-        # Copy your custom files with better error handling
+        # Copy custom source files
         for src_file in \
           "module/ASC.Mail/ASC.Mail/Utils/MailAddressHelper.cs" \
           "module/ASC.Mail/ASC.Mail/Core/DaoFactory.cs" \
@@ -425,9 +475,9 @@ jobs:
           fi
         done
         
-        # Include build summary if available
-        if [ -f "build-output/build-summary.txt" ]; then
-          cp build-output/build-summary.txt ./custom-package/opt/onlyoffice/CommunityServer/
+        # Include build report
+        if [ -f "build-output/build-report.md" ]; then
+          cp build-output/build-report.md ./custom-package/opt/onlyoffice/CommunityServer/
         fi
         
         # Create comprehensive documentation
@@ -440,46 +490,52 @@ jobs:
         **Build Date:** $(date)
         **OnlyOffice Version:** ${{ env.ONLYOFFICE_VERSION }}
         
-        ## Modified Mail Module Files
-        Enhanced CRM integration for automatic email-to-contact linking.
-        All incoming and outgoing emails are automatically added to CRM if contacts
-        are found in the address book.
+        ## Enhanced CRM Mail Integration
+        
+        This package includes enhanced CRM integration for automatic email-to-contact linking.
+        All incoming and outgoing emails are automatically added to CRM if contacts are found
+        in the address book.
         
         ### Modified Files:
-        - Utils/MailAddressHelper.cs
-        - Core/DaoFactory.cs  
-        - Core/Engine/CrmLinkEngine.cs
-        - Core/Engine/MessageEngine.cs
-        - Core/Dao/CrmContactDao.cs
-        - Core/Dao/Interfaces/ICrmContactDao.cs
+        - \`Utils/MailAddressHelper.cs\` - Enhanced email address validation and processing
+        - \`Core/DaoFactory.cs\` - Extended factory for CRM contact data access
+        - \`Core/Engine/CrmLinkEngine.cs\` - Automatic CRM linking engine  
+        - \`Core/Engine/MessageEngine.cs\` - Enhanced message processing with CRM integration
+        - \`Core/Dao/CrmContactDao.cs\` - CRM contact data access layer
+        - \`Core/Dao/Interfaces/ICrmContactDao.cs\` - CRM contact DAO interface
         
-        ### File Locations:
-        - Custom source files: /opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        - Build summary: /opt/onlyoffice/CommunityServer/build-summary.txt
+        ### Package Contents:
+        - **Compiled assemblies** (if build succeeded): Integrated into OnlyOffice binary directories
+        - **Source files**: \`/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/\`
+        - **Build report**: \`/opt/onlyoffice/CommunityServer/build-report.md\`
+        - **This documentation**: \`/opt/onlyoffice/CommunityServer/CUSTOM_CHANGES.md\`
         
-        ## Installation Notes
-        This package includes both the compiled DLLs (if build succeeded) and source files
-        for reference and potential manual compilation.
+        ### Installation Notes:
+        1. This package can be installed like any OnlyOffice Community Server package
+        2. If compiled assemblies are included, they will replace the original mail module
+        3. Source files are provided for reference and potential manual compilation
+        4. Check build-report.md for details on what assemblies were successfully compiled
         EOF
         
-        echo "✅ Custom package prepared"
+        echo "✅ Custom package prepared with comprehensive mail integration"
         
     - name: Build custom Debian package
       run: |
         echo "Building custom Debian package..."
         
-        # Update control file metadata
+        # Update package metadata
         if [ -f "./custom-package/DEBIAN/control" ]; then
+          # Update package name and version
           sed -i 's/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/' ./custom-package/DEBIAN/control
           sed -i "s/Version: .*/Version: ${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}/" ./custom-package/DEBIAN/control
           
           # Add custom description
           sed -i '/^Description:/a \ Custom build with enhanced CRM email integration.' ./custom-package/DEBIAN/control
-          sed -i '/Custom build with enhanced CRM email integration./a \ This package includes modifications to the mail module for automatic' ./custom-package/DEBIAN/control
-          sed -i '/This package includes modifications to the mail module for automatic/a \ email-to-contact linking in the CRM system.' ./custom-package/DEBIAN/control
+          sed -i '/Custom build with enhanced CRM email integration./a \ Includes automatic email-to-contact linking, enhanced mail processing,' ./custom-package/DEBIAN/control  
+          sed -i '/Includes automatic email-to-contact linking, enhanced mail processing,/a \ and improved CRM integration for OnlyOffice Community Server.' ./custom-package/DEBIAN/control
         fi
         
-        # Build the custom package
+        # Build the package
         dpkg-deb --build ./custom-package onlyoffice-communityserver-custom.deb
         
         echo "✅ Custom package created successfully"
@@ -532,17 +588,18 @@ jobs:
             rm packages-microsoft-prod.deb && \
             rm -rf /var/lib/apt/lists/*
         
-        # Install custom OnlyOffice package
+        # Install custom OnlyOffice package  
         COPY onlyoffice-communityserver-custom.deb /tmp/
         RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
             rm /tmp/onlyoffice-communityserver-custom.deb
         
-        # Add labels for identification
-        LABEL org.opencontainers.image.title="OnlyOffice Community Server - Custom Mail Integration"
-        LABEL org.opencontainers.image.description="OnlyOffice with enhanced CRM email integration"
+        # Add identification labels
+        LABEL org.opencontainers.image.title="OnlyOffice Community Server - Enhanced CRM Mail Integration"
+        LABEL org.opencontainers.image.description="OnlyOffice with automatic email-to-contact linking and enhanced CRM integration"
         LABEL org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}"
         LABEL org.opencontainers.image.revision="${{ github.sha }}"
         LABEL org.opencontainers.image.version="${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}"
+        LABEL maintainer="Custom Build from ${{ github.repository }}"
         
         EXPOSE 80 443 5222 9865 9888
         
