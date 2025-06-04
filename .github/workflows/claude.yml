@@ -1,85 +1,4 @@
-- name: Debug build issues (if needed)
-      if: steps.verify-build.outputs.success != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "🔍 Investigating build issues..."
-        
-        # Check if the mail project file exists and is valid
-        $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        if (Test-Path $mailProject) {
-          Write-Host "`n📋 Checking project file: $mailProject"
-          
-          try {
-            $projectContent = Get-Content $mailProject -Raw
-            
-            # Check for common issues
-            if ($projectContent -match "<OutputType>") {
-              $outputType = [regex]::Match($projectContent, "<OutputType>(.*?)</OutputType>").Groups[1].Value
-              Write-Host "   Output Type: $outputType"
-            }
-            
-            if ($projectContent -match "<TargetFramework>") {
-              $targetFramework = [regex]::Match($projectContent, "<TargetFramework>(.*?)</TargetFramework>").Groups[1].Value
-              Write-Host "   Target Framework: $targetFramework"
-            }
-            
-            # Check for project references
-            $projectRefs = [regex]::Matches($projectContent, "<ProjectReference[^>]*Include=`"([^`"]*)`"")
-            Write-Host "   Project References: $($projectRefs.Count)"
-            
-            # Check for NuGet package references
-            $packageRefs = [regex]::Matches($projectContent, "<PackageReference[^>]*Include=`"([^`"]*)`"")
-            Write-Host "   Package References: $($packageRefs.Count)"
-            
-          } catch {
-            Write-Host "   ❌ Error reading project file: $($_.Exception.Message)"
-          }
-        }
-        
-        # Check what files actually exist in the source directory
-        Write-Host "`n📂 Source files in mail module:"
-        if (Test-Path "module/ASC.Mail/ASC.Mail") {
-          $sourceFiles = Get-ChildItem "module/ASC.Mail/ASC.Mail" -Name "*.cs" -Recurse | Select-Object -First 10
-          foreach ($file in $sourceFiles) {
-            Write-Host "   📄 $file"
-          }
-          
-          $totalSources = (Get-ChildItem "module/ASC.Mail/ASC.Mail" -Name "*.cs" -Recurse).Count
-          Write-Host "   Total C# files: $totalSources"
-        }
-        
-        # Check for any compilation outputs
-        Write-Host "`n🔍 Searching for any compilation outputs..."
-        $allOutputs = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { 
-          $_.Name -like "*Mail*" 
-        }
-        
-        if ($allOutputs) {
-          Write-Host "Found mail-related DLLs:"
-          foreach ($output in $allOutputs) {
-            Write-Host "   📄 $($output.FullName.Replace((Get-Location).Path, '.')) - $($output.Length) bytes"
-          }
-        } else {
-          Write-Host "❌ No mail-related DLLs found anywhere"
-        }
-        
-        # Check if there are any error files
-        $errorFiles = Get-ChildItem -Path "." -Name "*.log" -Recurse | Select-Object -First 5
-        if ($errorFiles) {
-          Write-Host "`n📋 Log files found:"
-          foreach ($log in $errorFiles) {
-            Write-Host "   📄 $($log.Name)"
-            if ($log.Length -lt 10000) {  # Only show small log files
-              try {
-                $content = Get-Content $log.FullName | Select-Object -Last 10
-                Write-Host "      Last 10 lines:"
-                $content | ForEach-Object { Write-Host "      $_" }
-              } catch {
-                Write-Host "      Unable to read log"
-              }
-            }
-          }
-        }name: Build Custom OnlyOffice with Mail Module Changes
+name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   workflow_dispatch:
@@ -382,7 +301,7 @@ jobs:
           exit 1
         fi
 
-  # Optimized build job with smart caching
+
   build-mail-module:
     needs: prepare-environment
     runs-on: windows-latest
@@ -392,409 +311,292 @@ jobs:
       build-success: ${{ steps.verify-build.outputs.success }}
       
     steps:
-    - name: Checkout with submodules (conditional)
+    - name: Checkout with submodules
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1
+        fetch-depth: 0  # Full history needed for proper builds
         submodules: recursive
         
-    - name: Setup build environment (parallel)
-      run: |
-        # Setup .NET, MSBuild, and NuGet in parallel using background jobs
-        $job1 = Start-Job -ScriptBlock {
-          # This would be replaced by actual setup commands
-          Write-Host "Setting up .NET..."
-        }
-        
-        $job2 = Start-Job -ScriptBlock {
-          Write-Host "Setting up MSBuild..."
-        }
-        
-        $job3 = Start-Job -ScriptBlock {
-          Write-Host "Setting up NuGet..."
-        }
-        
-        # Wait for all setup jobs
-        $job1, $job2, $job3 | Wait-Job | Receive-Job
-        $job1, $job2, $job3 | Remove-Job
-        
-    - name: Setup .NET Framework and .NET SDK
+    - name: Setup .NET Framework (multiple versions)
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '6.0.x'  # Only what we need
+        dotnet-version: |
+          6.0.x
+          8.0.x
         
-    - name: Setup MSBuild
+    - name: Setup MSBuild (latest)
       uses: microsoft/setup-msbuild@v2
-      
-    - name: Setup NuGet
+      with:
+        msbuild-architecture: x64
+        
+    - name: Setup NuGet (latest)
       uses: nuget/setup-nuget@v2
-      
-    - name: Aggressive cache for dependencies
-      uses: actions/cache@v4
       with:
-        path: |
-          ~/.nuget/packages
-          packages/
-          **/obj/
-        key: build-deps-v3-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj', '**/*.sln') }}
-        restore-keys: |
-          build-deps-v3-${{ runner.os }}-
-          build-deps-v2-${{ runner.os }}-
-          
-    - name: Smart build cache
-      id: cache-build
-      if: env.FORCE_REBUILD != 'true'
-      uses: actions/cache@v4
-      with:
-        path: |
-          **/bin/Release/
-          Directory.Build.props
-        key: build-output-v3-${{ runner.os }}-${{ hashFiles('module/ASC.Mail/**/*.cs', 'common/**/*.cs', 'web/**/*.cs') }}
-        restore-keys: |
-          build-output-v3-${{ runner.os }}-
-          
-    - name: Fast project reference fix (only if needed)
-      if: steps.cache-build.outputs.cache-hit != 'true'
+        nuget-version: 'latest'
+        
+    - name: Install Visual Studio Build Tools
+      run: |
+        # Install additional build components that OnlyOffice might need
+        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.MSBuildTools --add Microsoft.VisualStudio.Workload.WebBuildTools --quiet"
+        
+    - name: Diagnose solution structure
       shell: pwsh
       run: |
-        Write-Host "🔧 Fast project reference fix..."
+        Write-Host "🔍 Analyzing solution structure..."
         
-        # Optimized GUID generation - use simple method by default
-        function Get-FastGuid($projectName) {
-          $hash = $projectName.GetHashCode()
-          return ("{0:X8}-{1:X4}-{2:X4}-{3:X4}-{4:X12}" -f `
-            ($hash -band 0xFFFFFFFF), `
-            (($hash -shr 16) -band 0xFFFF), `
-            (4000 + ($hash -band 0x0FFF)), `
-            (0x8000 + (($hash -shr 8) -band 0x3FFF)), `
-            ([Math]::Abs($hash) % 0xFFFFFFFFFFFF)).ToUpper()
+        # Find all solution files
+        $solutions = Get-ChildItem -Name "*.sln" -Recurse
+        Write-Host "Found solutions:"
+        $solutions | ForEach-Object { Write-Host "  📄 $_" }
+        
+        # Find mail-related projects
+        $mailProjects = Get-ChildItem -Name "*Mail*.csproj" -Recurse
+        Write-Host "`nMail-related projects:"
+        $mailProjects | ForEach-Object { 
+          Write-Host "  📄 $_"
+          # Check if project file is valid
+          try {
+            $content = Get-Content $_ -Raw
+            if ($content.Contains('<Project')) {
+              Write-Host "    ✅ Valid project file"
+            } else {
+              Write-Host "    ❌ Invalid project file"
+            }
+          } catch {
+            Write-Host "    ❌ Cannot read project file"
+          }
         }
         
-        # Only process mail module and dependencies
-        $criticalProjects = @(
+        # Look for the main mail module
+        $mainMailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
+        if (Test-Path $mainMailProject) {
+          Write-Host "`n📋 Main mail project found: $mainMailProject"
+          $content = Get-Content $mainMailProject -Raw
+          Write-Host "Target framework:"
+          if ($content -match '<TargetFramework[^>]*>([^<]+)</TargetFramework>') {
+            Write-Host "  🎯 $($matches[1])"
+          }
+        } else {
+          Write-Host "`n❌ Main mail project not found at expected location"
+        }
+        
+    - name: Global NuGet restore
+      shell: pwsh
+      run: |
+        Write-Host "📦 Comprehensive NuGet restore..."
+        
+        # Restore all solutions
+        $solutions = Get-ChildItem -Name "*.sln" -Recurse
+        foreach ($solution in $solutions) {
+          Write-Host "Restoring: $solution"
+          nuget restore $solution -Verbosity detailed -NonInteractive
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "⚠️ NuGet restore failed for $solution"
+          }
+        }
+        
+        # Also try dotnet restore for newer project formats
+        Write-Host "`nTrying dotnet restore..."
+        try {
+          dotnet restore --verbosity diagnostic
+        } catch {
+          Write-Host "dotnet restore failed: $($_.Exception.Message)"
+        }
+        
+    - name: Build entire solution first
+      shell: pwsh
+      run: |
+        Write-Host "🏗️ Building entire solution to resolve dependencies..."
+        
+        # Find the main solution file
+        $mainSolution = Get-ChildItem -Name "*.sln" | Where-Object { 
+          $_ -like "*OnlyOffice*" -or $_ -like "*CommunityServer*" 
+        } | Select-Object -First 1
+        
+        if (-not $mainSolution) {
+          $mainSolution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
+        }
+        
+        if ($mainSolution) {
+          Write-Host "Building solution: $mainSolution"
+          
+          # Try different build configurations
+          $configs = @("Release", "Debug")
+          $platforms = @("Any CPU", "AnyCPU", "x64")
+          
+          $buildSuccess = $false
+          foreach ($config in $configs) {
+            foreach ($platform in $platforms) {
+              Write-Host "Trying Configuration=$config, Platform=$platform"
+              
+              try {
+                msbuild $mainSolution /p:Configuration=$config /p:Platform="$platform" /verbosity:normal /maxcpucount /p:WarningLevel=0
+                if ($LASTEXITCODE -eq 0) {
+                  Write-Host "✅ Build successful with $config|$platform"
+                  $buildSuccess = $true
+                  break
+                }
+              } catch {
+                Write-Host "❌ Build failed with $config|$platform"
+              }
+            }
+            if ($buildSuccess) { break }
+          }
+          
+          if (-not $buildSuccess) {
+            Write-Host "⚠️ Full solution build failed, trying individual projects..."
+          }
+        } else {
+          Write-Host "❌ No solution file found"
+        }
+        
+    - name: Build mail module specifically
+      shell: pwsh
+      run: |
+        Write-Host "🎯 Building mail module specifically..."
+        
+        # Try to build mail projects individually
+        $mailProjects = @(
           "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj",
-          "common/ASC.Common/ASC.Common.csproj", 
-          "common/ASC.Core.Common/ASC.Core.Common.csproj",
-          "web/core/ASC.Web.Core/ASC.Web.Core.csproj"
+          "module/ASC.Mail/ASC.Mail.sln"
         )
         
-        $projectGuids = @{}
-        $fixed = 0
-        
-        foreach ($proj in $criticalProjects) {
-          if (Test-Path $proj) {
-            $content = Get-Content $proj -Raw
-            $pattern = '<ProjectReference\s+Include="([^"]+)"[^>]*?(?:\s*/>|>(.*?)</ProjectReference>)'
-            $matches = [regex]::Matches($content, $pattern, 'Singleline')
+        $buildSuccess = $false
+        foreach ($project in $mailProjects) {
+          if (Test-Path $project) {
+            Write-Host "Building: $project"
             
-            foreach ($match in $matches) {
-              $includePath = $match.Groups[1].Value
-              $innerContent = if ($match.Groups[2].Success) { $match.Groups[2].Value } else { "" }
-              $projectName = [System.IO.Path]::GetFileNameWithoutExtension($includePath)
+            # Clean first
+            msbuild $project /t:Clean /p:Configuration=Release /p:Platform=AnyCPU
+            
+            # Then build
+            msbuild $project /t:Build /p:Configuration=Release /p:Platform=AnyCPU /verbosity:diagnostic /maxcpucount
+            
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Successfully built $project"
+              $buildSuccess = $true
+            } else {
+              Write-Host "❌ Failed to build $project"
               
-              if (-not $innerContent.Contains('<Project>')) {
-                $guid = Get-FastGuid $projectName
-                $newRef = "<ProjectReference Include=`"$includePath`">`n      <Project>{$guid}</Project>`n      <n>$projectName</n>`n    </ProjectReference>"
-                $content = $content -replace [regex]::Escape($match.Value), $newRef
-                $fixed++
-              }
-            }
-            
-            Set-Content -Path $proj -Value $content -Encoding UTF8
-          }
-        }
-        
-        Write-Host "✅ Fixed $fixed references in critical projects"
-        
-        # Minimal Directory.Build.props
-        @"
-        <Project>
-          <PropertyGroup>
-            <Configuration Condition="`$(Configuration) == ''">Release</Configuration>
-            <Platform Condition="`$(Platform) == ''">AnyCPU</Platform>
-            <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-            <BuildProjectReferences>true</BuildProjectReferences>
-          </PropertyGroup>
-        </Project>
-        "@ | Set-Content -Path "Directory.Build.props" -Encoding UTF8
-        
-    - name: Fast NuGet restore (only what we need)
-      if: steps.cache-build.outputs.cache-hit != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "📦 Fast NuGet restore..."
-        
-        # Only restore for mail module solution
-        $mailSolution = "module/ASC.Mail/ASC.Mail.sln"
-        if (Test-Path $mailSolution) {
-          nuget restore $mailSolution -Verbosity quiet -NonInteractive
-        } else {
-          # Fallback to main solution
-          $mainSolution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
-          if ($mainSolution) {
-            nuget restore $mainSolution -Verbosity quiet -NonInteractive
-          }
-        }
-        
-    - name: Targeted build (mail module only)
-      if: steps.cache-build.outputs.cache-hit != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "🏗️ Building mail module with detailed logging..."
-        
-        # Build only what we need for the mail module
-        $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        
-        if (Test-Path $mailProject) {
-          Write-Host "Building mail project: $mailProject"
-          
-          # Build with detailed verbosity to catch issues
-          $buildResult = msbuild $mailProject /p:Configuration=Release /p:Platform=AnyCPU /verbosity:detailed /maxcpucount /flp:logfile=build.log`;verbosity=detailed
-          
-          # Check build exit code
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "✅ Build completed successfully"
-          } else {
-            Write-Host "⚠️ Build completed with exit code: $LASTEXITCODE"
-            
-            # Show detailed build log for errors
-            if (Test-Path "build.log") {
-              Write-Host "📋 Build log content:"
-              Get-Content "build.log" | Select-Object -Last 50
-            }
-          }
-          
-          # Check what was actually produced
-          Write-Host "`n🔍 Checking build outputs..."
-          $outputDir = "module/ASC.Mail/ASC.Mail/bin/Release"
-          if (Test-Path $outputDir) {
-            $files = Get-ChildItem $outputDir -Recurse
-            Write-Host "Files in $outputDir :"
-            foreach ($file in $files) {
-              Write-Host "  📄 $($file.Name) - $($file.Length) bytes"
-            }
-          }
-          
-          # Also check the web studio output
-          $webOutputDir = "web/studio/ASC.Web.Studio/bin"
-          if (Test-Path $webOutputDir) {
-            Write-Host "`nFiles in $webOutputDir :"
-            $webFiles = Get-ChildItem $webOutputDir -Name "ASC.Mail*"
-            foreach ($file in $webFiles) {
-              $fullFile = Get-Item "$webOutputDir/$file"
-              Write-Host "  📄 $($fullFile.Name) - $($fullFile.Length) bytes"
-            }
-          }
-          
-        } else {
-          Write-Host "⚠️ Mail project not found, trying solution build..."
-          
-          # Fallback to solution build with detailed logging
-          $solution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
-          if ($solution) {
-            Write-Host "Building solution: $solution"
-            msbuild $solution /p:Configuration=Release /p:Platform="Any CPU" /verbosity:detailed /maxcpucount /flp:logfile=solution_build.log`;verbosity=detailed
-            
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "⚠️ Solution build failed with exit code: $LASTEXITCODE"
-              if (Test-Path "solution_build.log") {
-                Write-Host "📋 Solution build log (last 50 lines):"
-                Get-Content "solution_build.log" | Select-Object -Last 50
+              # Try debug build as fallback
+              Write-Host "Trying Debug configuration..."
+              msbuild $project /t:Build /p:Configuration=Debug /p:Platform=AnyCPU /verbosity:diagnostic
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Debug build successful for $project"
+                $buildSuccess = $true
               }
             }
           }
         }
         
-    - name: Verify build results
+        # If specific projects fail, try building dependencies first
+        if (-not $buildSuccess) {
+          Write-Host "🔄 Building dependencies first..."
+          
+          $dependencies = @(
+            "common/ASC.Common/ASC.Common.csproj",
+            "common/ASC.Core.Common/ASC.Core.Common.csproj",
+            "web/core/ASC.Web.Core/ASC.Web.Core.csproj"
+          )
+          
+          foreach ($dep in $dependencies) {
+            if (Test-Path $dep) {
+              Write-Host "Building dependency: $dep"
+              msbuild $dep /p:Configuration=Release /p:Platform=AnyCPU /verbosity:minimal
+            }
+          }
+          
+          # Try mail module again
+          $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
+          if (Test-Path $mailProject) {
+            msbuild $mailProject /p:Configuration=Release /p:Platform=AnyCPU /verbosity:diagnostic
+          }
+        }
+        
+    - name: Comprehensive build verification
       id: verify-build
       shell: pwsh
       run: |
-        Write-Host "🔍 Searching for built assemblies..."
+        Write-Host "🔍 Comprehensive search for ASC.Mail assemblies..."
         $success = $false
-        
-        # Check multiple possible locations where ASC.Mail.dll might be built
-        $possiblePaths = @(
-          "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll",
-          "web/studio/ASC.Web.Studio/bin/ASC.Mail.dll",
-          "module/ASC.Mail/ASC.Mail/bin/ASC.Mail.dll"
-        )
-        
         $foundDlls = @()
-        $currentDir = (Get-Location).Path
         
-        foreach ($path in $possiblePaths) {
-          if (Test-Path $path) {
-            $dll = Get-Item $path
-            Write-Host "✅ Found ASC.Mail.dll at: $path"
-            Write-Host "   Size: $($dll.Length) bytes"
-            Write-Host "   Modified: $($dll.LastWriteTime)"
-            $foundDlls += $path
-            $success = $true
+        # Search everywhere for ASC.Mail.dll
+        try {
+          $allDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
+          
+          foreach ($dll in $allDlls) {
+            $size = $dll.Length
+            $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
+            
+            Write-Host "Found: $path ($size bytes)"
+            
+            # Check if it's a valid assembly (more than 49 bytes and has PE header)
+            if ($size -gt 10000) {  # Reasonable minimum for a compiled assembly
+              try {
+                # Try to load assembly metadata to verify it's valid
+                $assembly = [System.Reflection.Assembly]::ReflectionOnlyLoadFrom($dll.FullName)
+                Write-Host "✅ Valid assembly: $path"
+                $foundDlls += $path
+                $success = $true
+              } catch {
+                Write-Host "⚠️ Invalid assembly: $path"
+              }
+            } elseif ($size -le 100) {
+              Write-Host "❌ File too small (likely empty/stub): $path"
+            }
+          }
+        } catch {
+          Write-Host "Error during search: $($_.Exception.Message)"
+        }
+        
+        # Also search for any other mail-related assemblies
+        $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
+          Where-Object { $_.Length -gt 10000 }
+        
+        if ($otherMailDlls) {
+          Write-Host "`nOther mail-related assemblies:"
+          foreach ($dll in $otherMailDlls) {
+            $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
+            Write-Host "  📄 $path ($($dll.Length) bytes)"
           }
         }
         
-        # Also search for any ASC.Mail.dll files
-        Write-Host "`n🔍 Searching entire workspace for ASC.Mail.dll..."
-        try {
-          $allMailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
+        # Debug: Show what was actually built
+        Write-Host "`nAll DLL files in bin directories:"
+        $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
+          Where-Object { $_.DirectoryName -like "*bin*" } | 
+          Sort-Object Length -Descending | 
+          Select-Object -First 20
           
-          if ($allMailDlls -and $allMailDlls.Count -gt 0) {
-            Write-Host "Found ASC.Mail.dll files:"
-            foreach ($dll in $allMailDlls) {
-              try {
-                $fullPath = $dll.FullName
-                if ($fullPath -and $currentDir) {
-                  $relativePath = $fullPath.Replace($currentDir, "").TrimStart('\', '/')
-                  $size = if ($dll.Length) { $dll.Length } else { "unknown" }
-                  Write-Host "  📁 $relativePath ($size bytes)"
-                  
-                  # Only add non-empty paths and check if size > 1000 bytes (valid DLL)
-                  if ($relativePath -and $dll.Length -gt 1000) {
-                    if ($foundDlls -notcontains $relativePath) {
-                      $foundDlls += $relativePath
-                      $success = $true
-                    }
-                  }
-                }
-              } catch {
-                Write-Host "  ⚠️ Error processing file: $($dll.Name)"
-              }
-            }
-          } else {
-            Write-Host "No additional ASC.Mail.dll files found in workspace search"
-          }
-        } catch {
-          Write-Host "⚠️ Error during workspace search: $($_.Exception.Message)"
+        foreach ($dll in $binDlls) {
+          $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
+          Write-Host "  📄 $path ($($dll.Length) bytes)"
         }
         
         if ($success -and $foundDlls.Count -gt 0) {
-          Write-Host "`n✅ Build successful! Found $($foundDlls.Count) ASC.Mail.dll file(s)"
+          # Use the largest valid DLL
+          $mainDll = $foundDlls[0]
+          Write-Host "`n✅ Build verification successful!"
+          Write-Host "Primary DLL: $mainDll"
           
-          # Filter and find the largest/best DLL
-          $validDlls = @()
-          $suspiciousDlls = @()
-          
-          foreach ($path in $foundDlls) {
-            try {
-              if (Test-Path $path) {
-                $dll = Get-Item $path
-                Write-Host "`n🔍 Investigating: $path"
-                Write-Host "   Size: $($dll.Length) bytes"
-                Write-Host "   Created: $($dll.CreationTime)"
-                Write-Host "   Modified: $($dll.LastWriteTime)"
-                
-                if ($dll.Length -gt 100000) {  # Realistic DLL size (>100KB)
-                  $validDlls += @{Path = $path; Size = $dll.Length}
-                  Write-Host "   ✅ Valid DLL size"
-                } elseif ($dll.Length -gt 1000) {
-                  Write-Host "   ⚠️ Small but possible DLL"
-                  $validDlls += @{Path = $path; Size = $dll.Length}
-                } else {
-                  Write-Host "   ❌ Suspiciously small file"
-                  $suspiciousDlls += $path
-                  
-                  # Check file content for tiny files
-                  if ($dll.Length -lt 1000) {
-                    try {
-                      $content = Get-Content $path -Raw -ErrorAction SilentlyContinue
-                      if ($content) {
-                        Write-Host "   📄 Content preview: $($content.Substring(0, [Math]::Min(100, $content.Length)))"
-                      }
-                    } catch {
-                      Write-Host "   📄 Unable to read content (binary file)"
-                    }
-                  }
-                }
-              }
-            } catch {
-              Write-Host "  ⚠️ Could not validate: $path - $($_.Exception.Message)"
-            }
-          }
-          
-          if ($validDlls.Count -gt 0) {
-            # Sort by size and take the largest
-            $mainDll = ($validDlls | Sort-Object Size -Descending)[0]
-            $mainDllPath = $mainDll.Path
-            Write-Host "`n🎯 Selected primary assembly: $mainDllPath ($($mainDll.Size) bytes)"
-            
-            # Store the path for upload (ensure it's properly formatted)
-            $outputPath = $mainDllPath -replace '\\', '/'
-            echo "main_dll_path=$outputPath" >> $env:GITHUB_OUTPUT
-            
-            # Also store the directory for wildcard uploads
-            $dllDir = Split-Path $outputPath -Parent
-            echo "main_dll_dir=$dllDir" >> $env:GITHUB_OUTPUT
-            
-          } elseif ($suspiciousDlls.Count -gt 0) {
-            Write-Host "`n❌ Only found suspicious small files:"
-            foreach ($path in $suspiciousDlls) {
-              Write-Host "   📄 $path"
-            }
-            Write-Host "`n🔍 This suggests a build failure. Checking for common issues..."
-            
-            # Check for common build problems
-            Write-Host "`n📋 Build diagnostics:"
-            
-            # Check if build log exists
-            if (Test-Path "build.log") {
-              Write-Host "Build log found, checking for errors..."
-              $buildErrors = Get-Content "build.log" | Where-Object { $_ -match "error|Error|ERROR" }
-              if ($buildErrors) {
-                Write-Host "❌ Build errors found:"
-                $buildErrors | ForEach-Object { Write-Host "   $_" }
-              }
-            }
-            
-            # Check for missing dependencies
-            $nugetErrors = Get-Content "build.log" -ErrorAction SilentlyContinue | Where-Object { $_ -match "NU1" }
-            if ($nugetErrors) {
-              Write-Host "📦 NuGet issues found:"
-              $nugetErrors | ForEach-Object { Write-Host "   $_" }
-            }
-            
-            $success = $false
-          } else {
-            Write-Host "`n❌ No valid DLL files found"
-            $success = $false
-          }
+          echo "success=true" >> $env:GITHUB_OUTPUT
+          echo "main_dll_path=$mainDll" >> $env:GITHUB_OUTPUT
+          echo "main_dll_dir=$(Split-Path $mainDll -Parent)" >> $env:GITHUB_OUTPUT
         } else {
-          Write-Host "`n❌ ASC.Mail.dll not found in any expected location"
-          Write-Host "🔍 Checking what was actually built..."
-          
-          # Show what DLLs were actually built
-          try {
-            $builtDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
-              Where-Object { $_.DirectoryName -like "*bin*" } | 
-              Select-Object -First 10
-            
-            if ($builtDlls) {
-              Write-Host "Recently built DLLs:"
-              foreach ($dll in $builtDlls) {
-                try {
-                  $relativePath = $dll.FullName.Replace($currentDir, "").TrimStart('\', '/')
-                  $size = if ($dll.Length) { $dll.Length } else { "unknown" }
-                  Write-Host "  📄 $relativePath ($size bytes)"
-                } catch {
-                  Write-Host "  📄 $($dll.Name)"
-                }
-              }
-            } else {
-              Write-Host "No DLL files found in bin directories"
-            }
-          } catch {
-            Write-Host "Error searching for built DLLs: $($_.Exception.Message)"
-          }
+          Write-Host "`n❌ No valid ASC.Mail.dll assemblies found"
+          echo "success=false" >> $env:GITHUB_OUTPUT
         }
         
-        echo "success=$success" >> $env:GITHUB_OUTPUT
-        
-    - name: Upload build artifacts (conditional)
-      if: steps.verify-build.outputs.success == 'true' && steps.verify-build.outputs.main_dll_dir != ''
+    - name: Upload all build outputs for debugging
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: mail-module-build
+        name: build-debug-${{ github.run_number }}
         path: |
-          ${{ steps.verify-build.outputs.main_dll_dir }}/ASC.Mail.*
+          **/bin/**/*Mail*
+          **/*Mail*.dll
+          **/*Mail*.pdb
         retention-days: 1
 
   # Streamlined package creation
