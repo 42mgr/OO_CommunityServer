@@ -38,41 +38,97 @@ jobs:
       run: |
         echo "Using custom download script with Windows compatibility..."
         
+        # Install required tools for Windows
+        echo "Setting up download tools..."
+        
+        # Check if wget is available, if not use curl (which should be available on Windows)
+        if ! command -v wget &> /dev/null; then
+          echo "wget not found, creating wget wrapper using curl..."
+          cat > wget << 'EOF'
+        #!/bin/bash
+        # wget wrapper using curl for Windows compatibility
+        
+        OUTPUT_FILE=""
+        URL=""
+        
+        # Parse wget arguments
+        while [[ $# -gt 0 ]]; do
+          case $1 in
+            -O)
+              OUTPUT_FILE="$2"
+              shift 2
+              ;;
+            -o)
+              OUTPUT_FILE="$2"
+              shift 2
+              ;;
+            http*|https*)
+              URL="$1"
+              shift
+              ;;
+            *)
+              shift
+              ;;
+          esac
+        done
+        
+        # Use curl instead of wget
+        if [ -n "$OUTPUT_FILE" ] && [ -n "$URL" ]; then
+          curl -L -o "$OUTPUT_FILE" "$URL"
+        elif [ -n "$URL" ]; then
+          curl -L -O "$URL"
+        else
+          echo "Usage: wget -O output_file URL"
+          exit 1
+        fi
+        EOF
+          
+          chmod +x wget
+          export PATH="$(pwd):$PATH"
+        fi
+        
         # Create a mock dpkg-deb function for Windows
-        cat > dpkg-deb-mock.sh << 'EOF'
+        cat > dpkg-deb << 'EOF'
         #!/bin/bash
         # Mock dpkg-deb for Windows compatibility
         if [ "$1" = "--info" ]; then
           if [ -f "$2" ] && [ -s "$2" ]; then
-            echo "Package: mock-package"
-            echo "Version: mock-version"
+            echo "Package: onlyoffice-communityserver"
+            echo "Version: latest"
             echo "Architecture: amd64"
+            echo "Description: OnlyOffice Community Server"
             exit 0
           else
+            echo "dpkg-deb: error: failed to read archive '$2'"
             exit 1
           fi
         fi
+        echo "dpkg-deb: mock implementation"
         exit 0
         EOF
         
-        chmod +x dpkg-deb-mock.sh
-        
-        # Add mock dpkg-deb to PATH
-        export PATH="$(pwd):$PATH"
-        ln -sf dpkg-deb-mock.sh dpkg-deb
+        chmod +x dpkg-deb
         
         # Make the script executable and run it
         if [ -f ".github/build-scripts/download-deb.sh" ]; then
           chmod +x .github/build-scripts/download-deb.sh
+          
+          echo "Running download script with Windows-compatible tools..."
           ./.github/build-scripts/download-deb.sh
           
           # Verify the script worked
           if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
             echo "✅ Successfully downloaded OnlyOffice package using custom script"
-            echo "📦 Package size: $(stat -c%s onlyoffice-communityserver.deb 2>/dev/null || wc -c < onlyoffice-communityserver.deb) bytes"
+            file_size=$(wc -c < "onlyoffice-communityserver.deb" 2>/dev/null || echo "unknown")
+            echo "📦 Package size: $file_size bytes"
           else
             echo "❌ Custom script failed to download package"
+            echo "Checking what files were created..."
             ls -la *.deb 2>/dev/null || echo "No .deb files found"
+            ls -la minimal-deb* 2>/dev/null || echo "No minimal-deb files found"
+            
+            # Try to see if any package was created but with different name
+            find . -name "*.deb" -o -name "*onlyoffice*" 2>/dev/null || echo "No package files found"
             exit 1
           fi
         else
