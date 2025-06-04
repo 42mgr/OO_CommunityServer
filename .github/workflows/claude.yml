@@ -119,40 +119,41 @@ jobs:
       run: |
         Write-Host "Fixing MSBuild project configurations..."
         
-        # Find all .csproj files that might have configuration issues
-        $problematic_projects = Get-ChildItem -Path "." -Name "*.csproj" -Recurse | Where-Object { 
+        # Create a simple fix script file to avoid YAML escaping issues
+        $fixScript = @'
+        # Find problematic projects
+        $projects = Get-ChildItem -Path "." -Name "*.csproj" -Recurse | Where-Object { 
           $_ -like "*Mail.Server*" -or $_ -like "*ASC.Mail.Server*" 
         }
         
-        foreach ($proj in $problematic_projects) {
-          Write-Host "Checking project: $proj"
-          
+        foreach ($proj in $projects) {
           if (Test-Path $proj) {
+            Write-Host "Fixing project: $proj"
+            
             $content = Get-Content $proj -Raw
             
-            # Check if the project has proper PropertyGroup for Release|Any CPU
-            if ($content -notmatch '<PropertyGroup[^>]*Condition[^>]*Release.*Any CPU') {
-              Write-Host "Adding missing Release|Any CPU configuration to $proj"
+            # Simple replacement - add basic Release configuration
+            if ($content -notmatch 'Release.*Any CPU') {
+              $releaseBlock = "  <PropertyGroup Condition=`"'`$(Configuration)|`$(Platform)' == 'Release|Any CPU'`">`n    <OutputPath>bin\Release\</OutputPath>`n    <DebugType>pdbonly</DebugType>`n    <Optimize>true</Optimize>`n    <PlatformTarget>AnyCPU</PlatformTarget>`n  </PropertyGroup>"
               
-              # Add the missing configuration
-              $newConfig = @"
-  <PropertyGroup Condition=" `'`$(Configuration)|`$(Platform)`' == `'Release|Any CPU`' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-"@
-              
-              # Insert before the closing </Project> tag
-              $content = $content -replace '</Project>', ($newConfig + "`r`n</Project>")
+              # Insert before closing Project tag
+              $content = $content -replace '</Project>', ($releaseBlock + "`n</Project>")
               Set-Content -Path $proj -Value $content
-              Write-Host "✅ Fixed configuration for $proj"
+              Write-Host "Added Release configuration to $proj"
             }
           }
         }
+        '@
+        
+        # Save and execute the fix script
+        Set-Content -Path "fix-projects.ps1" -Value $fixScript
+        & .\fix-projects.ps1
+        
+        # Also create Directory.Build.props for global settings
+        $buildProps = '<Project><PropertyGroup><Platform Condition="$(Platform) == ''''">AnyCPU</Platform><Configuration Condition="$(Configuration) == ''''">Release</Configuration></PropertyGroup></Project>'
+        
+        Set-Content -Path "Directory.Build.props" -Value $buildProps
+        Write-Host "Created Directory.Build.props"
         
     - name: Restore NuGet packages for mail module
       shell: pwsh
