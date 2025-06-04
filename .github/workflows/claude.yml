@@ -2,9 +2,9 @@ name: Build OnlyOffice Community Server
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ main ]
+    branches: [ master, main ]
   workflow_dispatch:  # Allow manual trigger
 
 env:
@@ -31,7 +31,7 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '18'
-        cache: 'npm'
+        # Remove cache since there's no package-lock.json in repo root
         
     - name: Install system dependencies
       run: |
@@ -116,14 +116,35 @@ jobs:
         
     - name: Build frontend assets (if available)
       run: |
-        if [ -d "web" ]; then
-          echo "Building frontend assets..."
-          cd web
-          if [ -f "package.json" ]; then
-            npm ci --silent
-            npm run build --if-present
-          fi
-          cd ..
+        # Look for frontend directories with package.json
+        if find . -name "package.json" -not -path "./node_modules/*" | head -1; then
+          echo "Found frontend projects, building assets..."
+          
+          # Find and build each frontend project
+          find . -name "package.json" -not -path "./node_modules/*" | while read package_file; do
+            project_dir=$(dirname "$package_file")
+            echo "Building frontend in: $project_dir"
+            
+            cd "$project_dir"
+            
+            # Install dependencies
+            if [ -f "package-lock.json" ]; then
+              npm ci --silent
+            elif [ -f "yarn.lock" ]; then
+              yarn install --frozen-lockfile --silent
+            else
+              npm install --silent
+            fi
+            
+            # Build if build script exists
+            if npm run build --if-present --silent; then
+              echo "Built successfully in $project_dir"
+            else
+              echo "No build script or build failed in $project_dir"
+            fi
+            
+            cd - > /dev/null
+          done
         else
           echo "No frontend assets to build"
         fi
