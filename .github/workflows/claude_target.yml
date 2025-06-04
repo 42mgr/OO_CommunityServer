@@ -1,4 +1,40 @@
-- name: Build Docker image
+name: Build Custom OnlyOffice with Mail Module Changes
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  ONLYOFFICE_VERSION: "12.0.0"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Setup .NET Framework and .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          6.0.x
+          5.0.x
+          
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+        
+    - name: Download official OnlyOffice package
+      shell: bash
       run: |
         cat > Dockerfile << 'EOF'
         FROM ubuntu:20.04
