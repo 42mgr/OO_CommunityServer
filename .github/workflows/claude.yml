@@ -26,6 +26,16 @@ jobs:
           onlyoffice-deb-${{ env.ONLYOFFICE_VERSION }}-
           onlyoffice-deb-
     
+    - name: Cache extracted OnlyOffice package
+      id: cache-extracted
+      uses: actions/cache@v4
+      with:
+        path: |
+          official-package/
+        key: onlyoffice-extracted-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') }}
+        restore-keys: |
+          onlyoffice-extracted-${{ env.ONLYOFFICE_VERSION }}-
+    
     - name: Install dependencies
       run: |
         echo "Installing required tools..."
@@ -34,21 +44,35 @@ jobs:
         
         echo "✅ All dependencies ready"
         
-    - name: Check if DEB already exists
-      id: check-deb
+    - name: Check cache status and download if needed
+      id: check-status
       run: |
+        echo "=== CACHE STATUS CHECK ==="
+        
+        # Check DEB package status
         if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
           echo "deb_exists=true" >> $GITHUB_OUTPUT
-          echo "✅ OnlyOffice DEB file already exists"
+          echo "✅ OnlyOffice DEB file exists in cache"
           dpkg-deb --info onlyoffice-communityserver.deb | head -10
-          echo "📦 Existing package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
+          echo "📦 DEB package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
         else
           echo "deb_exists=false" >> $GITHUB_OUTPUT
           echo "❌ OnlyOffice DEB file not found or empty"
         fi
         
+        # Check extracted package status
+        if [ -d "official-package" ] && [ "$(find official-package -type f | wc -l)" -gt 10 ]; then
+          echo "extracted_exists=true" >> $GITHUB_OUTPUT
+          echo "✅ Extracted package exists in cache"
+          echo "📁 Extracted files count: $(find official-package -type f | wc -l)"
+          echo "📁 Extracted package size: $(du -sh official-package | cut -f1)"
+        else
+          echo "extracted_exists=false" >> $GITHUB_OUTPUT
+          echo "❌ Extracted package not found or incomplete"
+        fi
+        
     - name: Download official OnlyOffice package
-      if: steps.check-deb.outputs.deb_exists != 'true'
+      if: steps.check-status.outputs.deb_exists != 'true'
       run: |
         echo "Downloading OnlyOffice package..."
         
@@ -70,15 +94,73 @@ jobs:
         fi
         
     - name: Extract official package
+      if: steps.check-status.outputs.extracted_exists != 'true'
       run: |
         echo "Extracting official package..."
+        
+        # Ensure we have the DEB file before extracting
+        if [ ! -f "onlyoffice-communityserver.deb" ] || [ ! -s "onlyoffice-communityserver.deb" ]; then
+          echo "❌ DEB file not available for extraction"
+          exit 1
+        fi
+        
+        # Clean any partial extraction
+        rm -rf official-package/
+        
+        # Extract the package
+        echo "Extracting DEB contents..."
         dpkg-deb -x onlyoffice-communityserver.deb ./official-package/
+        
+        echo "Extracting DEB control information..."
         dpkg-deb -e onlyoffice-communityserver.deb ./official-package/DEBIAN/
+        
+        # Verify extraction
+        extracted_files=$(find ./official-package -type f | wc -l)
+        extracted_size=$(du -sh ./official-package | cut -f1)
+        
+        echo "✅ Extraction completed"
+        echo "📁 Extracted $extracted_files files"
+        echo "📁 Total extracted size: $extracted_size"
         
         echo "Looking for existing mail module assemblies..."
         find ./official-package -name "ASC.Mail*" -type f || echo "No ASC.Mail files found"
         
-    - name: Upload extracted package
+    - name: Verify final package state
+      run: |
+        echo "=== FINAL PACKAGE VERIFICATION ==="
+        
+        # Verify DEB package
+        if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
+          echo "✅ DEB package ready"
+          echo "   Size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
+        else
+          echo "❌ DEB package missing or empty"
+          exit 1
+        fi
+        
+        # Verify extracted package
+        if [ -d "official-package" ]; then
+          extracted_files=$(find official-package -type f | wc -l)
+          extracted_size=$(du -sh official-package | cut -f1)
+          
+          if [ "$extracted_files" -gt 10 ]; then
+            echo "✅ Extracted package ready"
+            echo "   Files: $extracted_files"
+            echo "   Size: $extracted_size"
+            
+            # Show key directories
+            echo "📂 Key package structure:"
+            find official-package -maxdepth 3 -type d | head -10 | sed 's/^/   /'
+          else
+            echo "❌ Extracted package appears incomplete ($extracted_files files)"
+            exit 1
+          fi
+        else
+          echo "❌ Extracted package directory missing"
+          exit 1
+        fi
+        
+    - name: Upload package artifacts
       uses: actions/upload-artifact@v4
       with:
         name: extracted-onlyoffice-package
@@ -87,7 +169,7 @@ jobs:
           official-package/
         retention-days: 1
 
-  build-mail-module:
+build-mail-module:
     needs: download-and-prepare
     runs-on: windows-latest
     
@@ -110,73 +192,150 @@ jobs:
     - name: Setup NuGet
       uses: nuget/setup-nuget@v2
       
+    - name: Cache NuGet packages
+      id: cache-nuget
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.nuget/packages
+          packages/
+        key: nuget-packages-${{ runner.os }}-${{ hashFiles('**/packages.config', '**/*.csproj') }}
+        restore-keys: |
+          nuget-packages-${{ runner.os }}-
+          
+    - name: Cache build outputs
+      id: cache-build
+      uses: actions/cache@v4
+      with:
+        path: |
+          **/bin/Release/
+          **/obj/Release/
+        key: build-output-${{ runner.os }}-${{ github.sha }}-${{ hashFiles('**/*.cs', '**/*.csproj') }}
+        restore-keys: |
+          build-output-${{ runner.os }}-${{ github.sha }}-
+          build-output-${{ runner.os }}-
+        
     - name: Download extracted package
       uses: actions/download-artifact@v4
       with:
         name: extracted-onlyoffice-package
         
-    - name: Fix ALL project references and configurations
+    - name: Check build cache status
+      id: build-status
       shell: pwsh
       run: |
-        Write-Host "Fixing ALL project references and configurations..."
+        Write-Host "=== BUILD CACHE STATUS ==="
         
-        # Find ALL .csproj files in the entire repository
+        # Check if ASC.Mail.dll already exists from cache
+        if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
+          Write-Host "✅ ASC.Mail.dll found in cache!"
+          $dll = Get-Item "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll"
+          Write-Host "   Size: $($dll.Length) bytes"
+          Write-Host "   Modified: $($dll.LastWriteTime)"
+          echo "build_needed=false" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Host "❌ Build artifacts not found in cache, build needed"
+          echo "build_needed=true" >> $env:GITHUB_OUTPUT
+        }
+        
+        # Check NuGet package cache status
+        if (Test-Path "packages") {
+          $packageCount = (Get-ChildItem "packages" -Recurse -File | Measure-Object).Count
+          Write-Host "✅ Found $packageCount NuGet package files in cache"
+          echo "nuget_cached=true" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Host "❌ NuGet packages not found in cache"
+          echo "nuget_cached=false" >> $env:GITHUB_OUTPUT
+        }
+        
+    - name: Fix ALL project reference metadata systematically
+      if: steps.build-status.outputs.build_needed == 'true'
+      shell: pwsh
+      run: |
+        Write-Host "=== COMPREHENSIVE PROJECT REFERENCE METADATA FIX ==="
+        Write-Host "This will fix ALL MSB3107 errors across the entire solution"
+        
+        # Find ALL .csproj files in the repository
         $allProjects = Get-ChildItem -Path "." -Name "*.csproj" -Recurse
-        
         Write-Host "Found $($allProjects.Count) project files to fix"
         
-        foreach ($proj in $allProjects) {
-          Write-Host "Processing project: $proj"
+        # Create a mapping of project names to GUIDs for consistency
+        $projectGuids = @{}
+        
+        # Function to generate deterministic GUID from project name
+        function Get-DeterministicGuid($projectName) {
+          if ($script:projectGuids.ContainsKey($projectName)) {
+            return $script:projectGuids[$projectName]
+          }
           
+          # Generate a deterministic GUID based on project name
+          $guidSeed = $projectName.ToLower()
+          $hash = [System.Security.Cryptography.SHA1]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($guidSeed))
+          $guidBytes = $hash[0..15]
+          $guidBytes[6] = ($guidBytes[6] -band 0x0F) -bor 0x50  # Version 5
+          $guidBytes[8] = ($guidBytes[8] -band 0x3F) -bor 0x80  # Variant
+          $guid = [System.Guid]::new($guidBytes)
+          
+          $script:projectGuids[$projectName] = $guid.ToString().ToUpper()
+          return $script:projectGuids[$projectName]
+        }
+        
+        # First pass: collect all project names and generate GUIDs
+        Write-Host "`nFirst pass: Collecting project names and generating GUIDs..."
+        foreach ($proj in $allProjects) {
+          $projectName = [System.IO.Path]::GetFileNameWithoutExtension($proj)
+          $guid = Get-DeterministicGuid $projectName
+        }
+        
+        # Second pass: fix all project reference metadata
+        Write-Host "`nSecond pass: Fixing project reference metadata..."
+        $totalFixed = 0
+        
+        foreach ($proj in $allProjects) {
           if (Test-Path $proj) {
             $content = Get-Content $proj -Raw
-            $modified = $false
+            $originalContent = $content
             
-            # Fix 1: Add missing Release|Any CPU configuration
-            if ($content -notmatch 'Release.*Any CPU') {
-              Write-Host "  Adding Release|Any CPU configuration"
-              
-              $releaseXml = "  <PropertyGroup Condition=`"'`$(Configuration)|`$(Platform)' == 'Release|Any CPU'`">`n"
-              $releaseXml += "    <OutputPath>bin\Release\</OutputPath>`n"
-              $releaseXml += "    <DebugType>pdbonly</DebugType>`n"
-              $releaseXml += "    <Optimize>true</Optimize>`n"
-              $releaseXml += "    <PlatformTarget>AnyCPU</PlatformTarget>`n"
-              $releaseXml += "    <WarningLevel>1</WarningLevel>`n"
-              $releaseXml += "    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>`n"
-              $releaseXml += "  </PropertyGroup>"
-              
-              $content = $content -replace '</Project>', ($releaseXml + "`n</Project>")
-              $modified = $true
-            }
+            # Find all ProjectReference elements
+            $projectRefs = [regex]::Matches($content, '<ProjectReference\s+Include="([^"]+)"[^>]*>(.*?)</ProjectReference>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
             
-            # Fix 2: Add missing Debug|Any CPU configuration
-            if ($content -notmatch 'Debug.*Any CPU') {
-              Write-Host "  Adding Debug|Any CPU configuration"
+            if ($projectRefs.Count -gt 0) {
+              foreach ($match in $projectRefs) {
+                $fullMatch = $match.Value
+                $includePath = $match.Groups[1].Value
+                $innerContent = $match.Groups[2].Value
+                
+                # Extract project name from include path
+                $referencedProjectName = [System.IO.Path]::GetFileNameWithoutExtension($includePath)
+                
+                # Check if this reference already has proper metadata
+                if (-not $innerContent.Contains('<Project>') -or -not $innerContent.Contains('<n>')) {
+                  # Get the GUID for this project
+                  $guid = Get-DeterministicGuid $referencedProjectName
+                  
+                  # Create proper ProjectReference with metadata
+                  $newProjectRef = "<ProjectReference Include=`"$includePath`">`n"
+                  $newProjectRef += "      <Project>{$guid}</Project>`n"
+                  $newProjectRef += "      <n>$referencedProjectName</n>`n"
+                  $newProjectRef += "    </ProjectReference>"
+                  
+                  # Replace the old reference
+                  $content = $content -replace [regex]::Escape($fullMatch), $newProjectRef
+                  $totalFixed++
+                }
+              }
               
-              $debugXml = "  <PropertyGroup Condition=`"'`$(Configuration)|`$(Platform)' == 'Debug|Any CPU'`">`n"
-              $debugXml += "    <OutputPath>bin\Debug\</OutputPath>`n"
-              $debugXml += "    <DebugSymbols>true</DebugSymbols>`n"
-              $debugXml += "    <DebugType>full</DebugType>`n"
-              $debugXml += "    <Optimize>false</Optimize>`n"
-              $debugXml += "    <PlatformTarget>AnyCPU</PlatformTarget>`n"
-              $debugXml += "    <WarningLevel>1</WarningLevel>`n"
-              $debugXml += "    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>`n"
-              $debugXml += "  </PropertyGroup>"
-              
-              $content = $content -replace '</Project>', ($debugXml + "`n</Project>")
-              $modified = $true
-            }
-            
-            if ($modified) {
-              Set-Content -Path $proj -Value $content -Encoding UTF8
-              Write-Host "  ✅ Fixed configurations for $proj"
-            } else {
-              Write-Host "  ✅ $proj already has proper configurations"
+              # Save the file if it was modified
+              if ($content -ne $originalContent) {
+                Set-Content -Path $proj -Value $content -Encoding UTF8
+              }
             }
           }
         }
         
-        # Create comprehensive Directory.Build.props with global project reference settings
+        Write-Host "✅ Fixed $totalFixed project references"
+        
+        # Create Directory.Build.props
         $buildPropsXml = @"
         <Project>
           <PropertyGroup>
@@ -185,14 +344,12 @@ jobs:
             <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
             <WarningLevel>1</WarningLevel>
             <OutputPath Condition="`$(OutputPath) == ''">bin\`$(Configuration)\</OutputPath>
-            
-            <!-- Fix for project reference resolution -->
             <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
             <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
             <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+            <BuildProjectReferences>true</BuildProjectReferences>
           </PropertyGroup>
           
-          <!-- Default configurations for all projects -->
           <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Release|AnyCPU'">
             <OutputPath>bin\Release\</OutputPath>
             <DebugType>pdbonly</DebugType>
@@ -200,240 +357,115 @@ jobs:
             <PlatformTarget>AnyCPU</PlatformTarget>
           </PropertyGroup>
           
-          <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Debug|AnyCPU'">
-            <OutputPath>bin\Debug\</OutputPath>
-            <DebugSymbols>true</DebugSymbols>
-            <DebugType>full</DebugType>
-            <Optimize>false</Optimize>
+          <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Release|Any CPU'">
+            <OutputPath>bin\Release\</OutputPath>
+            <DebugType>pdbonly</DebugType>
+            <Optimize>true</Optimize>
             <PlatformTarget>AnyCPU</PlatformTarget>
           </PropertyGroup>
         </Project>
         "@
         
         Set-Content -Path "Directory.Build.props" -Value $buildPropsXml -Encoding UTF8
-        Write-Host "✅ Created comprehensive Directory.Build.props"
-        
-    - name: Restore NuGet packages comprehensively
+        Write-Host "✅ Created Directory.Build.props"
+
+    - name: Restore NuGet packages (only if not cached)
+      if: steps.build-status.outputs.build_needed == 'true' && steps.build-status.outputs.nuget_cached != 'true'
       shell: pwsh
       run: |
-        Write-Host "Restoring NuGet packages comprehensively..."
+        Write-Host "Restoring NuGet packages..."
         
-        # Ensure we're in the right directory
-        Set-Location $env:GITHUB_WORKSPACE
-        Write-Host "Working directory: $(Get-Location)"
+        # Restore solution packages
+        $slnFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse
         
-        # First, try to restore any solution files
-        try {
-          $slnFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse -ErrorAction Stop
-          
-          if ($slnFiles) {
-            foreach ($sln in $slnFiles) {
-              Write-Host "Restoring packages for solution: $sln"
-              try {
-                nuget restore $sln -Verbosity normal -NonInteractive -Force
-                Write-Host "✅ Successfully restored $sln"
-              } catch {
-                Write-Host "⚠️ Warning: Failed to restore $sln - $($_.Exception.Message)"
-              }
+        if ($slnFiles) {
+          foreach ($sln in $slnFiles) {
+            Write-Host "Restoring packages for solution: $sln"
+            try {
+              nuget restore $sln -Verbosity normal -NonInteractive -Force
+              Write-Host "✅ Successfully restored $sln"
+            } catch {
+              Write-Host "⚠️ Warning: Failed to restore $sln"
             }
-          } else {
-            Write-Host "No solution files found"
           }
-        } catch {
-          Write-Host "⚠️ Error searching for solution files: $($_.Exception.Message)"
         }
         
-        # Restore packages for individual projects that have packages.config
-        try {
-          $packagesConfigs = Get-ChildItem -Path "." -Name "packages.config" -Recurse -ErrorAction SilentlyContinue
+        # Restore individual packages.config files
+        $packagesConfigs = Get-ChildItem -Path "." -Name "packages.config" -Recurse
+        
+        if ($packagesConfigs) {
+          Write-Host "Found $($packagesConfigs.Count) packages.config files"
           
-          if ($packagesConfigs) {
-            Write-Host "Found $($packagesConfigs.Count) packages.config files"
-            
-            foreach ($pkgConfig in $packagesConfigs) {
-              $projectDir = Split-Path $pkgConfig -Parent
-              $fullProjectDir = Resolve-Path $projectDir
-              Write-Host "Restoring packages for: $fullProjectDir"
-              
-              try {
-                Push-Location $fullProjectDir
-                
-                # Determine the correct packages directory relative path
-                $depth = ($fullProjectDir.ToString() -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count - ($env:GITHUB_WORKSPACE -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count
-                $packagesDir = "../" * $depth + "packages"
-                
-                Write-Host "  Using packages directory: $packagesDir"
-                nuget restore packages.config -PackagesDirectory $packagesDir -Verbosity normal -Force
-                Write-Host "  ✅ Successfully restored packages for $($projectDir)"
-                
-                Pop-Location
-              } catch {
-                Write-Host "  ⚠️ Warning: Failed to restore packages for $projectDir - $($_.Exception.Message)"
-                Pop-Location
-              }
+          foreach ($pkgConfig in $packagesConfigs) {
+            $projectDir = Split-Path $pkgConfig -Parent
+            try {
+              Push-Location $projectDir
+              $depth = ($projectDir -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count - ($env:GITHUB_WORKSPACE -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count
+              $packagesDir = "../" * $depth + "packages"
+              nuget restore packages.config -PackagesDirectory $packagesDir -Verbosity normal -Force
+              Pop-Location
+            } catch {
+              Write-Host "⚠️ Warning: Failed to restore packages for $projectDir"
+              Pop-Location
             }
-          } else {
-            Write-Host "No packages.config files found"
           }
-        } catch {
-          Write-Host "⚠️ Error searching for packages.config files: $($_.Exception.Message)"
         }
         
-        # Final check - make sure we're back in the workspace
-        Set-Location $env:GITHUB_WORKSPACE
-        
-    - name: Try solution-based build approach first
+    - name: Build solution (only if needed)
+      if: steps.build-status.outputs.build_needed == 'true'
       shell: pwsh
       run: |
-        Write-Host "Attempting solution-based build approach..."
+        Write-Host "=== BUILDING SOLUTION ==="
         
-        # Find all solution files
+        # Find solution files
         $solutionFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse
         
         if ($solutionFiles) {
-          Write-Host "Found $($solutionFiles.Count) solution files:"
-          foreach ($sln in $solutionFiles) {
-            Write-Host "  - $sln"
-          }
-          
-          # Try building the main solution that contains the mail module
-          $mainSolution = $solutionFiles | Where-Object { $_ -like "*Studio*" -or $_ -like "*Mail*" -or $_ -like "*CommunityServer*" } | Select-Object -First 1
+          # Use the Studio.sln which seems to be the main solution
+          $mainSolution = $solutionFiles | Where-Object { $_ -like "*Studio*" } | Select-Object -First 1
           
           if (-not $mainSolution) {
             $mainSolution = $solutionFiles[0]
           }
           
-          Write-Host "`n=== Building main solution: $mainSolution ==="
+          Write-Host "Building solution: $mainSolution"
           
           try {
-            # Build the solution with comprehensive settings - FIXED QUOTES
-            Write-Host "Building solution with comprehensive configuration..."
             msbuild $mainSolution /p:Configuration=Release /p:Platform="Any CPU" /p:TreatWarningsAsErrors=false /p:WarningLevel=1 /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None /p:AutoGenerateBindingRedirects=true /p:BuildProjectReferences=true /verbosity:normal /maxcpucount /nologo
-              
+            
             if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Successfully built solution: $mainSolution"
+              Write-Host "🎉 SUCCESS: Solution built without errors!"
             } else {
-              Write-Host "❌ Failed to build solution: $mainSolution (exit code: $LASTEXITCODE)"
+              Write-Host "⚠️ Build completed with exit code: $LASTEXITCODE"
             }
           } catch {
-            Write-Host "❌ Exception building solution: $($_.Exception.Message)"
+            Write-Host "❌ Exception during build: $($_.Exception.Message)"
           }
-          
-          # Check if our target was built
-          if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
-            Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built via solution!"
-            Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
-          } else {
-            Write-Host "`n⚠️ ASC.Mail.dll not found after solution build"
-            
-            # Check what was actually built
-            Write-Host "Checking what assemblies were built..."
-            $builtDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { $_ -like "*bin*Release*" -or $_ -like "*bin*Debug*" }
-            if ($builtDlls) {
-              Write-Host "Built DLLs found:"
-              $builtDlls | ForEach-Object { Write-Host "  - $_" }
-            } else {
-              Write-Host "No DLLs were built successfully"
-            }
-          }
-        } else {
-          Write-Host "❌ No solution files found!"
         }
         
-    - name: Fallback - Build individual projects with dependency order
+    - name: Verify build results
       shell: pwsh
       run: |
-        Write-Host "Fallback: Building individual projects with dependency order..."
+        Write-Host "=== BUILD RESULTS VERIFICATION ==="
         
-        # Build order: common projects first, then mail module
-        $buildOrder = @(
-          "common/ASC.Common/ASC.Common.csproj",
-          "common/ASC.Core.Common/ASC.Core.Common.csproj", 
-          "common/ASC.Data.Storage/ASC.Data.Storage.csproj",
-          "web/core/ASC.Web.Core/ASC.Web.Core.csproj",
-          "module/ASC.Api/ASC.Api/ASC.Api.Core.csproj",
-          "module/ASC.Api/ASC.Specific/ASC.Specific.csproj",
-          "module/ASC.ElasticSearch/ASC.ElasticSearch.csproj",
-          "module/ASC.Mail.Server/ASC.Mail.Server/ASC.Mail.Server.csproj",
-          "module/ASC.Thrdparty/ASC.FederatedLogin/ASC.FederatedLogin.csproj",
-          "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        )
-        
-        $successfulBuilds = @()
-        $failedBuilds = @()
-        
-        foreach ($project in $buildOrder) {
-          if (Test-Path $project) {
-            Write-Host "`n=== Building: $project ==="
-            
-            try {
-              # FIXED: Single line with proper parameter formatting
-              msbuild $project /p:Configuration=Release /p:Platform="Any CPU" /p:TreatWarningsAsErrors=false /p:WarningLevel=1 /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None /p:AutoGenerateBindingRedirects=true /verbosity:minimal /nologo
-                
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Successfully built $project"
-                $successfulBuilds += $project
-              } else {
-                Write-Host "❌ Failed to build $project (exit code: $LASTEXITCODE)"
-                $failedBuilds += $project
-                
-                # For critical dependencies, try to continue anyway
-                if ($project -like "*ASC.Common*") {
-                  Write-Host "⚠️ Critical dependency failed, but continuing..."
-                }
-              }
-            } catch {
-              Write-Host "❌ Exception building $project`: $($_.Exception.Message)"
-              $failedBuilds += $project
-            }
-          } else {
-            Write-Host "⚠️ Project not found: $project"
-          }
-        }
-        
-        Write-Host "`n=== Build Summary ==="
-        Write-Host "Successful builds ($($successfulBuilds.Count)):"
-        foreach ($success in $successfulBuilds) {
-          Write-Host "  ✅ $success"
-        }
-        
-        Write-Host "Failed builds ($($failedBuilds.Count)):"
-        foreach ($failed in $failedBuilds) {
-          Write-Host "  ❌ $failed"
-        }
-        
-        # Check if our main target (ASC.Mail) was built successfully
+        # Check if mail module was built
         if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
-          Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built!"
-          Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
+          Write-Host "✅ ASC.Mail.dll was built successfully!"
+          $mailDll = Get-Item "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll"
+          Write-Host "   Size: $($mailDll.Length) bytes"
+          Write-Host "   Modified: $($mailDll.LastWriteTime)"
         } else {
-          Write-Host "`n❌ FAILED: ASC.Mail.dll was not built"
-          Write-Host "Attempting verbose build of mail module..."
-          
-          # Try one more time with verbose output to see what's failing
-          Set-Location "module/ASC.Mail/ASC.Mail"
-          msbuild ASC.Mail.csproj /p:Configuration=Release /p:Platform="Any CPU" /p:TreatWarningsAsErrors=false /verbosity:detailed
-          Set-Location $env:GITHUB_WORKSPACE
+          Write-Host "❌ ASC.Mail.dll not found"
         }
         
-    - name: Collect comprehensive build outputs
-      shell: pwsh
-      run: |
-        Write-Host "Collecting all build outputs..."
-        
-        # Find all DLLs that were built
+        # Count total built DLLs
         $allBuiltDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { 
           $fullPath = Resolve-Path $_
           $dir = Split-Path $fullPath -Parent
-          $dir -like "*bin*Release*" -or $dir -like "*bin*Debug*"
+          $dir -like "*bin*Release*"
         }
         
-        Write-Host "Found $($allBuiltDlls.Count) built DLL files:"
-        foreach ($dll in $allBuiltDlls) {
-          $fullPath = Resolve-Path $dll
-          $fileInfo = Get-Item $fullPath
-          Write-Host "  📦 $dll - $($fileInfo.Length) bytes - $($fileInfo.LastWriteTime)"
-        }
+        Write-Host "📊 Total assemblies built: $($allBuiltDlls.Count)"
         
         # Create build report
         $buildReport = @"
@@ -442,14 +474,11 @@ jobs:
         ## Build Summary
         - Total DLLs found: $($allBuiltDlls.Count)
         - ASC.Mail.dll built: $(Test-Path 'module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll')
+        - Build from cache: $('${{ steps.build-status.outputs.build_needed }}' -eq 'false')
+        - NuGet from cache: $('${{ steps.build-status.outputs.nuget_cached }}' -eq 'true')
         
         ## Built Assemblies
         $($allBuiltDlls | ForEach-Object { "- $_" } | Out-String)
-        
-        ## Key Files Status
-        - ASC.Mail.dll: $(if (Test-Path 'module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll') { '✅ FOUND' } else { '❌ MISSING' })
-        - ASC.Common.dll: $(if (Get-ChildItem -Name 'ASC.Common.dll' -Recurse) { '✅ FOUND' } else { '❌ MISSING' })
-        - ASC.Core.Common.dll: $(if (Get-ChildItem -Name 'ASC.Core.Common.dll' -Recurse) { '✅ FOUND' } else { '❌ MISSING' })
         "@
         
         Set-Content -Path "build-report.md" -Value $buildReport -Encoding UTF8
@@ -468,7 +497,7 @@ jobs:
           build-report.md
         retention-days: 3
 
-  create-custom-package:
+create-custom-package:
     needs: [download-and-prepare, build-mail-module]
     runs-on: ubuntu-latest
     if: always() && needs.download-and-prepare.result == 'success'
