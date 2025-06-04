@@ -1,60 +1,4 @@
-- name: Try solution-based build approach first
-      shell: pwsh
-      run: |
-        Write-Host "Attempting solution-based build approach..."
-        
-        # Find all solution files
-        $solutionFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse
-        
-        if ($solutionFiles) {
-          Write-Host "Found $($solutionFiles.Count) solution files:"
-          foreach ($sln in $solutionFiles) {
-            Write-Host "  - $sln"
-          }
-          
-          # Try building the main solution that contains the mail module
-          $mainSolution = $solutionFiles | Where-Object { $_ -like "*Studio*" -or $_ -like "*Mail*" -or $_ -like "*CommunityServer*" } | Select-Object -First 1
-          
-          if (-not $mainSolution) {
-            $mainSolution = $solutionFiles[0]
-          }
-          
-          Write-Host "`n=== Building main solution: $mainSolution ==="
-          
-          try {
-            # Build the solution with comprehensive settings
-            Write-Host "Building solution with comprehensive configuration..."
-            msbuild $mainSolution `
-              /p:Configuration=Release `
-              /p:Platform="Any CPU" `
-              /p:TreatWarningsAsErrors=false `
-              /p:WarningLevel=1 `
-              /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None `
-              /p:AutoGenerateBindingRedirects=true `
-              /p:BuildProjectReferences=true `
-              /verbosity:normal `
-              /maxcpucount `
-              /nologo
-              
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Successfully built solution: $mainSolution"
-            } else {
-              Write-Host "❌ Failed to build solution: $mainSolution (exit code: $LASTEXITCODE)"
-            }
-          } catch {
-            Write-Host "❌ Exception building solution: $($_.Exception.Message)"
-          }
-          
-          # Check if our target was built
-          if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
-            Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built via solution!"
-            Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
-          } else {
-            Write-Host "`n⚠️ ASC.Mail.dll not found after solution build"
-            
-            # Check what was actually built
-            Write-Host "Checking what assemblies were built..."
-            $builtDlls = Gename: Build Custom OnlyOffice with Mail Module Changes
+name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   workflow_dispatch:
@@ -338,70 +282,73 @@ jobs:
         # Final check - make sure we're back in the workspace
         Set-Location $env:GITHUB_WORKSPACE
         
-    - name: Build dependencies first, then mail module
+    - name: Try solution-based build approach first
       shell: pwsh
       run: |
-        Write-Host "Building dependencies first, then mail module..."
+        Write-Host "Attempting solution-based build approach..."
         
-        # Build order: common projects first, then mail module
-        $buildOrder = @(
-          "common/ASC.Common/ASC.Common.csproj",
-          "common/ASC.Core.Common/ASC.Core.Common.csproj", 
-          "common/ASC.Data.Storage/ASC.Data.Storage.csproj",
-          "web/core/ASC.Web.Core/ASC.Web.Core.csproj",
-          "module/ASC.Api/ASC.Api/ASC.Api.Core.csproj",
-          "module/ASC.Api/ASC.Specific/ASC.Specific.csproj",
-          "module/ASC.ElasticSearch/ASC.ElasticSearch.csproj",
-          "module/ASC.Mail.Server/ASC.Mail.Server/ASC.Mail.Server.csproj",
-          "module/ASC.Thrdparty/ASC.FederatedLogin/ASC.FederatedLogin.csproj",
-          "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        )
+        # Find all solution files
+        $solutionFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse
         
-        $successfulBuilds = @()
-        $failedBuilds = @()
-        
-        foreach ($project in $buildOrder) {
-          if (Test-Path $project) {
-            Write-Host "`n=== Building: $project ==="
-            
-            try {
-              msbuild $project `
-                /p:Configuration=Release `
-                /p:Platform="Any CPU" `
-                /p:TreatWarningsAsErrors=false `
-                /p:WarningLevel=1 `
-                /verbosity:minimal `
-                /nologo
-                
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Successfully built $project"
-                $successfulBuilds += $project
-              } else {
-                Write-Host "❌ Failed to build $project (exit code: $LASTEXITCODE)"
-                $failedBuilds += $project
-              }
-            } catch {
-              Write-Host "❌ Exception building $project`: $($_.Exception.Message)"
-              $failedBuilds += $project
-            }
-          } else {
-            Write-Host "⚠️ Project not found: $project"
+        if ($solutionFiles) {
+          Write-Host "Found $($solutionFiles.Count) solution files:"
+          foreach ($sln in $solutionFiles) {
+            Write-Host "  - $sln"
           }
-        }
-        
-        Write-Host "`n=== Build Summary ==="
-        Write-Host "Successful builds ($($successfulBuilds.Count)):"
-        foreach ($success in $successfulBuilds) {
-          Write-Host "  ✅ $success"
-        }
-        
-        Write-Host "Failed builds ($($failedBuilds.Count)):"
-        foreach ($failed in $failedBuilds) {
-          Write-Host "  ❌ $failed"
-        }
-        
-        # Check if our main target (ASC.Mail) was built successfully
-        if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
+          
+          # Try building the main solution that contains the mail module
+          $mainSolution = $solutionFiles | Where-Object { $_ -like "*Studio*" -or $_ -like "*Mail*" -or $_ -like "*CommunityServer*" } | Select-Object -First 1
+          
+          if (-not $mainSolution) {
+            $mainSolution = $solutionFiles[0]
+          }
+          
+          Write-Host "`n=== Building main solution: $mainSolution ==="
+          
+          try {
+            # Build the solution with comprehensive settings
+            Write-Host "Building solution with comprehensive configuration..."
+            msbuild $mainSolution `
+              /p:Configuration=Release `
+              /p:Platform="Any CPU" `
+              /p:TreatWarningsAsErrors=false `
+              /p:WarningLevel=1 `
+              /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None `
+              /p:AutoGenerateBindingRedirects=true `
+              /p:BuildProjectReferences=true `
+              /verbosity:normal `
+              /maxcpucount `
+              /nologo
+              
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Successfully built solution: $mainSolution"
+            } else {
+              Write-Host "❌ Failed to build solution: $mainSolution (exit code: $LASTEXITCODE)"
+            }
+          } catch {
+            Write-Host "❌ Exception building solution: $($_.Exception.Message)"
+          }
+          
+          # Check if our target was built
+          if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
+            Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built via solution!"
+            Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
+          } else {
+            Write-Host "`n⚠️ ASC.Mail.dll not found after solution build"
+            
+            # Check what was actually built
+            Write-Host "Checking what assemblies were built..."
+            $builtDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { $_ -like "*bin*Release*" -or $_ -like "*bin*Debug*" }
+            if ($builtDlls) {
+              Write-Host "Built DLLs found:"
+              $builtDlls | ForEach-Object { Write-Host "  - $_" }
+            } else {
+              Write-Host "No DLLs were built successfully"
+            }
+          }
+        } else {
+          Write-Host "❌ No solution files found!"
+        }ASC.Mail/bin/Release/ASC.Mail.dll") {
           Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built successfully!"
           Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
         } else {
