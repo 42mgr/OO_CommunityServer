@@ -382,14 +382,69 @@ jobs:
       id: verify-build
       shell: pwsh
       run: |
+        Write-Host "🔍 Searching for built assemblies..."
         $success = $false
         
-        if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
-          $dll = Get-Item "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll"
-          Write-Host "✅ ASC.Mail.dll built: $($dll.Length) bytes"
-          $success = $true
+        # Check multiple possible locations where ASC.Mail.dll might be built
+        $possiblePaths = @(
+          "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll",
+          "web/studio/ASC.Web.Studio/bin/ASC.Mail.dll",
+          "module/ASC.Mail/ASC.Mail/bin/ASC.Mail.dll"
+        )
+        
+        $foundDlls = @()
+        
+        foreach ($path in $possiblePaths) {
+          if (Test-Path $path) {
+            $dll = Get-Item $path
+            Write-Host "✅ Found ASC.Mail.dll at: $path"
+            Write-Host "   Size: $($dll.Length) bytes"
+            Write-Host "   Modified: $($dll.LastWriteTime)"
+            $foundDlls += $path
+            $success = $true
+          }
+        }
+        
+        # Also search for any ASC.Mail.dll files
+        Write-Host "`n🔍 Searching entire workspace for ASC.Mail.dll..."
+        $allMailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
+        
+        if ($allMailDlls) {
+          Write-Host "Found ASC.Mail.dll files:"
+          foreach ($dll in $allMailDlls) {
+            $fullPath = $dll.FullName.Replace((Get-Location).Path + "\", "")
+            $size = $dll.Length
+            Write-Host "  📁 $fullPath ($size bytes)"
+            if ($foundDlls -notcontains $fullPath) {
+              $foundDlls += $fullPath
+              $success = $true
+            }
+          }
+        }
+        
+        if ($success) {
+          Write-Host "`n✅ Build successful! Found $($foundDlls.Count) ASC.Mail.dll file(s)"
+          # Use the largest file (most likely the main one)
+          $mainDll = $foundDlls | ForEach-Object { Get-Item $_ } | Sort-Object Length -Descending | Select-Object -First 1
+          Write-Host "📋 Primary assembly: $($mainDll.FullName.Replace((Get-Location).Path + '\', ''))"
+          
+          # Store the path for upload
+          echo "main_dll_path=$($mainDll.FullName.Replace((Get-Location).Path + '\', ''))" >> $env:GITHUB_OUTPUT
         } else {
-          Write-Host "❌ ASC.Mail.dll not found"
+          Write-Host "`n❌ ASC.Mail.dll not found in any expected location"
+          Write-Host "🔍 Checking what was actually built..."
+          
+          # Show what DLLs were actually built
+          $builtDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { 
+            $_.DirectoryName -like "*bin*" 
+          } | Select-Object -First 10
+          
+          if ($builtDlls) {
+            Write-Host "Recently built DLLs:"
+            foreach ($dll in $builtDlls) {
+              Write-Host "  📄 $($dll.FullName.Replace((Get-Location).Path + '\', ''))"
+            }
+          }
         }
         
         echo "success=$success" >> $env:GITHUB_OUTPUT
@@ -400,10 +455,10 @@ jobs:
       with:
         name: mail-module-build
         path: |
-          module/ASC.Mail/ASC.Mail/bin/Release/*.dll
-          module/ASC.Mail/ASC.Mail/bin/Release/*.pdb
-          module/ASC.Mail/ASC.Mail/bin/Release/*.xml
-          module/ASC.Mail/ASC.Mail/bin/Release/*.config
+          ${{ steps.verify-build.outputs.main_dll_path }}
+          web/studio/ASC.Web.Studio/bin/ASC.Mail.*
+          module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.*
+          module/ASC.Mail/ASC.Mail/bin/ASC.Mail.*
         retention-days: 1
 
   # Streamlined package creation
@@ -439,34 +494,64 @@ jobs:
         cp -r official-package custom-package
         
         # Replace mail module if we have a new one  
-        if [ -f "build-output/ASC.Mail.dll" ]; then
-          echo "📋 Integrating enhanced mail module..."
+        if [ -d "build-output/" ]; then
+          echo "📋 Searching for built mail assemblies..."
           
-          # Find all ASC.Mail.dll locations and replace them
-          while IFS= read -r dll_path; do
-            if [ -f "$dll_path" ]; then
-              cp "build-output/ASC.Mail.dll" "$dll_path"
-              echo "  ✅ Updated: $dll_path"
-            fi
-          done < <(find custom-package -name "ASC.Mail.dll" -type f)
+          # Find any ASC.Mail.dll files in the build output
+          mail_dlls=$(find build-output -name "ASC.Mail.dll" -type f 2>/dev/null || true)
           
-          # Also copy any related files (PDB, XML, etc.)
-          for ext in pdb xml exe.config; do
-            if [ -f "build-output/ASC.Mail.$ext" ]; then
+          if [ -n "$mail_dlls" ]; then
+            echo "✅ Found compiled mail assemblies:"
+            echo "$mail_dlls"
+            
+            # Get the largest DLL file (most likely the main one)
+            main_dll=$(echo "$mail_dlls" | xargs ls -la | sort -k5 -nr | head -1 | awk '{print $NF}')
+            echo "📋 Using primary DLL: $main_dll"
+            
+            # Find all ASC.Mail.dll locations in the package and replace them
+            package_dlls=$(find custom-package -name "ASC.Mail.dll" -type f 2>/dev/null || true)
+            
+            if [ -n "$package_dlls" ]; then
+              echo "🔄 Replacing mail assemblies in package:"
               while IFS= read -r dll_path; do
-                base_path="${dll_path%.dll}.$ext"
-                if [ -f "$base_path" ]; then
-                  cp "build-output/ASC.Mail.$ext" "$base_path"
-                  echo "  ✅ Updated: $base_path"
+                if [ -f "$dll_path" ]; then
+                  cp "$main_dll" "$dll_path"
+                  echo "  ✅ Updated: $dll_path"
                 fi
-              done < <(find custom-package -name "ASC.Mail.dll" -type f)
+              done <<< "$package_dlls"
+              
+              # Also copy any related files (PDB, XML, etc.)
+              main_dll_dir=$(dirname "$main_dll")
+              for ext in pdb xml exe.config; do
+                if [ -f "${main_dll_dir}/ASC.Mail.$ext" ]; then
+                  while IFS= read -r dll_path; do
+                    base_path="${dll_path%.dll}.$ext"
+                    base_dir=$(dirname "$dll_path")
+                    if [ -f "$base_path" ] || [ -d "$base_dir" ]; then
+                      cp "${main_dll_dir}/ASC.Mail.$ext" "$base_dir/" 2>/dev/null || true
+                      echo "  ✅ Updated: ASC.Mail.$ext in $base_dir"
+                    fi
+                  done <<< "$package_dlls"
+                fi
+              done
+              
+            else
+              echo "⚠️ No ASC.Mail.dll files found in package to replace"
+              # Create a new directory for the compiled assemblies
+              mkdir -p custom-package/opt/onlyoffice/CommunityServer/bin/
+              echo "$mail_dlls" | while read -r dll; do
+                if [ -f "$dll" ]; then
+                  cp "$dll" custom-package/opt/onlyoffice/CommunityServer/bin/
+                  echo "  ✅ Added: $(basename "$dll") to package"
+                fi
+              done
             fi
-          done
-          
-        elif [ -d "build-output/" ]; then
-          echo "⚠️ Build output directory exists but ASC.Mail.dll not found"
-          echo "Available files in build-output:"
-          find build-output -name "*.dll" -type f | head -10 || echo "No DLL files found"
+            
+          else
+            echo "ℹ️ No ASC.Mail.dll found in build output, using original mail module"
+            echo "Available files in build-output:"
+            find build-output -name "*.dll" -type f | head -10 || echo "No DLL files found"
+          fi
         else
           echo "ℹ️ No build output available, using original mail module"
         fi
