@@ -99,47 +99,134 @@ jobs:
       run: |
         echo "⬇️ Downloading OnlyOffice package..."
         
-        # Multiple download URLs to try (with version fallbacks)
-        VERSIONS_TO_TRY=("${{ env.ONLYOFFICE_VERSION }}" $(echo "${{ env.FALLBACK_VERSIONS }}" | tr ',' ' '))
+    - name: Smart download with repository method
+      if: steps.cache-deb.outputs.cache-hit != 'true'
+      run: |
+        echo "⬇️ Setting up OnlyOffice repository and downloading package..."
+        
+        # Add OnlyOffice APT repository
+        echo "🔧 Adding OnlyOffice repository..."
+        wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
+        echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
+        
+        # Update package lists
+        sudo apt-get update -qq
+        
+        # Try to download the package without installing dependencies
+        echo "📦 Downloading OnlyOffice Community Server package..."
         
         download_success=false
         
-        for version in "${VERSIONS_TO_TRY[@]}"; do
-          echo "🔄 Trying version: $version"
+        # Method 1: Download using apt-get download
+        if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
+          deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+          if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
+            mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+            echo "✅ Downloaded via apt-get download"
+            download_success=true
+          fi
+        fi
+        
+        # Method 2: Use the official installation script to get package info
+        if [ "$download_success" = false ]; then
+          echo "🔄 Trying installation script method..."
           
-          DOWNLOAD_URLS=(
-            "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v${version}/onlyoffice-communityserver_amd64.deb"
-            "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v${version}/onlyoffice-communityserver_${version}_amd64.deb"
-            "https://download.onlyoffice.com/install/community/onlyoffice-communityserver_${version}_amd64.deb" 
-            "https://download.onlyoffice.com/install/community/onlyoffice-communityserver_amd64.deb"
-          )
+          # Download the workspace installation script
+          wget -q https://download.onlyoffice.com/install/workspace-install.sh -O /tmp/workspace-install.sh
+          chmod +x /tmp/workspace-install.sh
           
-          for url in "${DOWNLOAD_URLS[@]}"; do
-            echo "  📥 Trying: $url"
-            
-            if wget --progress=dot:mega --timeout=120 --tries=2 \
-              "$url" -O onlyoffice-communityserver.deb 2>&1; then
-              
-              # Validate download
-              if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
-                file_size=$(stat -c%s onlyoffice-communityserver.deb)
-                if [ "$file_size" -gt 50000000 ]; then  # Must be > 50MB
-                  echo "✅ Download successful! Version: $version, Size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
-                  download_success=true
-                  break 2
-                else
-                  echo "  ⚠️ File too small ($file_size bytes), likely error page"
-                  rm -f onlyoffice-communityserver.deb
+          # Extract the package URL from the script (if possible)
+          if grep -o 'https://[^"]*onlyoffice-communityserver[^"]*\.deb' /tmp/workspace-install.sh > /tmp/package_urls.txt; then
+            while IFS= read -r url; do
+              echo "🔄 Trying direct download: $url"
+              if wget --timeout=60 --tries=2 "$url" -O onlyoffice-communityserver.deb 2>/dev/null; then
+                if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
+                  file_size=$(stat -c%s onlyoffice-communityserver.deb)
+                  if [ "$file_size" -gt 50000000 ]; then
+                    echo "✅ Downloaded via script URL: $url"
+                    download_success=true
+                    break
+                  fi
                 fi
               fi
-            fi
-            echo "  ❌ Failed: $url"
-          done
-          
-          if [ "$download_success" = true ]; then
-            break
+            done < /tmp/package_urls.txt
           fi
-        done
+        fi
+        
+        # Method 3: Try alternative repository URLs
+        if [ "$download_success" = false ]; then
+          echo "🔄 Trying alternative repositories..."
+          
+          # Try the community repository
+          echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
+          sudo apt-get update -qq
+          
+          if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
+            deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+            if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
+              mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+              echo "✅ Downloaded from community repository"
+              download_success=true
+            fi
+          fi
+        fi
+        
+        # Method 4: Try building from Docker (as fallback)
+        if [ "$download_success" = false ]; then
+          echo "🔄 Trying Docker extraction method..."
+          
+          # Install Docker if needed
+          if ! command -v docker >/dev/null 2>&1; then
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+          fi
+          
+          # Pull OnlyOffice Community Server Docker image and extract package
+          if sudo docker pull onlyoffice/communityserver:latest; then
+            # Create container and copy package files
+            container_id=$(sudo docker create onlyoffice/communityserver:latest)
+            
+            # Try to find and extract the DEB package from the container
+            if sudo docker cp "$container_id":/app/onlyoffice/ /tmp/onlyoffice_extracted 2>/dev/null; then
+              # Look for DEB files or create a pseudo-package
+              echo "📦 Creating package from Docker container..."
+              mkdir -p /tmp/docker_package/DEBIAN
+              
+              # Copy the application files
+              sudo cp -r /tmp/onlyoffice_extracted /tmp/docker_package/opt/onlyoffice/
+              
+              # Create a basic control file
+              cat > /tmp/docker_package/DEBIAN/control << EOF
+        Package: onlyoffice-communityserver-custom
+        Version: docker-extracted-$(date +%Y%m%d)
+        Architecture: all
+        Maintainer: Custom Build
+        Description: OnlyOffice Community Server extracted from Docker
+        EOF
+              
+              # Create the package
+              sudo chown -R root:root /tmp/docker_package/
+              if dpkg-deb --build /tmp/docker_package onlyoffice-communityserver.deb; then
+                echo "✅ Created package from Docker container"
+                download_success=true
+              fi
+            fi
+            
+            sudo docker rm "$container_id" 2>/dev/null || true
+          fi
+        fi
+        
+        if [ "$download_success" = false ]; then
+          echo "❌ All download methods failed!"
+          echo "💡 OnlyOffice Community Server may need to be installed via the official script"
+          echo "💡 Consider using the Docker installation method instead"
+          exit 1
+        fi
+        
+        # Final validation and info
+        echo "📦 Final package info:"
+        ls -lh onlyoffice-communityserver.deb
+        dpkg-deb --info onlyoffice-communityserver.deb | head -10
         
         # If direct downloads fail, try using the custom build script if available
         if [ "$download_success" = false ] && [ -f ".github/build-scripts/download-deb.sh" ]; then
@@ -488,10 +575,9 @@ jobs:
       with:
         name: mail-module-build
         path: |
-          ${{ steps.verify-build.outputs.main_dll_path }}
-          web/studio/ASC.Web.Studio/bin/ASC.Mail.*
-          module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.*
-          module/ASC.Mail/ASC.Mail/bin/ASC.Mail.*
+          web/studio/ASC.Web.Studio/bin/ASC.Mail.dll
+          web/studio/ASC.Web.Studio/bin/ASC.Mail.pdb
+          web/studio/ASC.Web.Studio/bin/ASC.Mail.xml
         retention-days: 1
 
   # Streamlined package creation
@@ -551,34 +637,44 @@ jobs:
           
           # Install dependencies
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wget dpkg-dev
+          sudo apt-get install -y --no-install-recommends wget dpkg-dev apt-transport-https ca-certificates
           
-          # Download using the same logic as prepare job
-          VERSIONS_TO_TRY=("${{ env.ONLYOFFICE_VERSION }}" $(echo "${{ env.FALLBACK_VERSIONS }}" | tr ',' ' '))
+          # Add OnlyOffice APT repository
+          echo "🔧 Adding OnlyOffice repository..."
+          wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
+          echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
+          
+          # Update package lists
+          sudo apt-get update -qq
           
           download_success=false
           
-          for version in "${VERSIONS_TO_TRY[@]}"; do
-            echo "🔄 Emergency download attempt for version: $version"
+          # Try to download the package using apt-get download
+          echo "📦 Downloading OnlyOffice Community Server..."
+          if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
+            deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+            if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
+              mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+              echo "✅ Emergency download successful!"
+              download_success=true
+            fi
+          fi
+          
+          # Fallback: Try alternative repository
+          if [ "$download_success" = false ]; then
+            echo "🔄 Trying alternative repository..."
+            echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
+            sudo apt-get update -qq
             
-            DOWNLOAD_URLS=(
-              "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v${version}/onlyoffice-communityserver_amd64.deb"
-              "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v${version}/onlyoffice-communityserver_${version}_amd64.deb"
-            )
-            
-            for url in "${DOWNLOAD_URLS[@]}"; do
-              if wget --timeout=60 --tries=2 "$url" -O onlyoffice-communityserver.deb 2>/dev/null; then
-                if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
-                  file_size=$(stat -c%s onlyoffice-communityserver.deb)
-                  if [ "$file_size" -gt 50000000 ]; then
-                    echo "✅ Emergency download successful! Version: $version"
-                    download_success=true
-                    break 2
-                  fi
-                fi
+            if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
+              deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+              if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
+                mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+                echo "✅ Alternative repository download successful!"
+                download_success=true
               fi
-            done
-          done
+            fi
+          fi
           
           if [ "$download_success" = false ]; then
             echo "❌ Emergency download failed"
