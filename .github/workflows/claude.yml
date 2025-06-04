@@ -16,6 +16,33 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
+    
+    - name: Cache APT packages
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/apt
+        key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-apt-
+    
+    - name: Install dependencies
+      run: |
+        echo "Installing required tools..."
+        
+        # Check what's already available
+        echo "Pre-installed tools:"
+        which wget curl jq file || echo "Some tools missing"
+        
+        # Update and install missing tools
+        sudo apt-get update -qq
+        sudo apt-get install -y wget curl jq file dpkg-dev
+        
+        echo "✅ All dependencies ready"
+        echo "Tool versions:"
+        wget --version | head -1
+        curl --version | head -1  
+        jq --version
+        file --version | head -1
         
     - name: Download official OnlyOffice package
       run: |
