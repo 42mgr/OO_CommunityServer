@@ -306,19 +306,9 @@ jobs:
           Write-Host "`n=== Building main solution: $mainSolution ==="
           
           try {
-            # Build the solution with comprehensive settings
+            # Build the solution with comprehensive settings - FIXED QUOTES
             Write-Host "Building solution with comprehensive configuration..."
-            msbuild $mainSolution `
-              /p:Configuration=Release `
-              /p:Platform="Any CPU" `
-              /p:TreatWarningsAsErrors=false `
-              /p:WarningLevel=1 `
-              /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None `
-              /p:AutoGenerateBindingRedirects=true `
-              /p:BuildProjectReferences=true `
-              /verbosity:normal `
-              /maxcpucount `
-              /nologo
+            msbuild $mainSolution /p:Configuration=Release /p:Platform="Any CPU" /p:TreatWarningsAsErrors=false /p:WarningLevel=1 /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None /p:AutoGenerateBindingRedirects=true /p:BuildProjectReferences=true /verbosity:normal /maxcpucount /nologo
               
             if ($LASTEXITCODE -eq 0) {
               Write-Host "✅ Successfully built solution: $mainSolution"
@@ -348,22 +338,81 @@ jobs:
           }
         } else {
           Write-Host "❌ No solution files found!"
-        }ASC.Mail/bin/Release/ASC.Mail.dll") {
-          Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built successfully!"
+        }
+        
+    - name: Fallback - Build individual projects with dependency order
+      shell: pwsh
+      run: |
+        Write-Host "Fallback: Building individual projects with dependency order..."
+        
+        # Build order: common projects first, then mail module
+        $buildOrder = @(
+          "common/ASC.Common/ASC.Common.csproj",
+          "common/ASC.Core.Common/ASC.Core.Common.csproj", 
+          "common/ASC.Data.Storage/ASC.Data.Storage.csproj",
+          "web/core/ASC.Web.Core/ASC.Web.Core.csproj",
+          "module/ASC.Api/ASC.Api/ASC.Api.Core.csproj",
+          "module/ASC.Api/ASC.Specific/ASC.Specific.csproj",
+          "module/ASC.ElasticSearch/ASC.ElasticSearch.csproj",
+          "module/ASC.Mail.Server/ASC.Mail.Server/ASC.Mail.Server.csproj",
+          "module/ASC.Thrdparty/ASC.FederatedLogin/ASC.FederatedLogin.csproj",
+          "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
+        )
+        
+        $successfulBuilds = @()
+        $failedBuilds = @()
+        
+        foreach ($project in $buildOrder) {
+          if (Test-Path $project) {
+            Write-Host "`n=== Building: $project ==="
+            
+            try {
+              # FIXED: Single line with proper parameter formatting
+              msbuild $project /p:Configuration=Release /p:Platform="Any CPU" /p:TreatWarningsAsErrors=false /p:WarningLevel=1 /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None /p:AutoGenerateBindingRedirects=true /verbosity:minimal /nologo
+                
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Successfully built $project"
+                $successfulBuilds += $project
+              } else {
+                Write-Host "❌ Failed to build $project (exit code: $LASTEXITCODE)"
+                $failedBuilds += $project
+                
+                # For critical dependencies, try to continue anyway
+                if ($project -like "*ASC.Common*") {
+                  Write-Host "⚠️ Critical dependency failed, but continuing..."
+                }
+              }
+            } catch {
+              Write-Host "❌ Exception building $project`: $($_.Exception.Message)"
+              $failedBuilds += $project
+            }
+          } else {
+            Write-Host "⚠️ Project not found: $project"
+          }
+        }
+        
+        Write-Host "`n=== Build Summary ==="
+        Write-Host "Successful builds ($($successfulBuilds.Count)):"
+        foreach ($success in $successfulBuilds) {
+          Write-Host "  ✅ $success"
+        }
+        
+        Write-Host "Failed builds ($($failedBuilds.Count)):"
+        foreach ($failed in $failedBuilds) {
+          Write-Host "  ❌ $failed"
+        }
+        
+        # Check if our main target (ASC.Mail) was built successfully
+        if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
+          Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built!"
           Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
         } else {
           Write-Host "`n❌ FAILED: ASC.Mail.dll was not built"
+          Write-Host "Attempting verbose build of mail module..."
           
-          # Try building just the mail module with more verbose output
-          Write-Host "`nAttempting verbose build of mail module..."
+          # Try one more time with verbose output to see what's failing
           Set-Location "module/ASC.Mail/ASC.Mail"
-          
-          msbuild ASC.Mail.csproj `
-            /p:Configuration=Release `
-            /p:Platform="Any CPU" `
-            /p:TreatWarningsAsErrors=false `
-            /verbosity:detailed
-            
+          msbuild ASC.Mail.csproj /p:Configuration=Release /p:Platform="Any CPU" /p:TreatWarningsAsErrors=false /verbosity:detailed
           Set-Location $env:GITHUB_WORKSPACE
         }
         
