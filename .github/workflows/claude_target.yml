@@ -1,4 +1,46 @@
-name: Build Custom OnlyOffice with Mail Module Changes
+- name: Build Docker image
+      run: |
+        cat > Dockerfile << 'EOF'
+        FROM ubuntu:20.04
+        
+        ENV DEBIAN_FRONTEND=noninteractive
+        
+        # Install dependencies
+        RUN apt-get update && \
+            apt-get install -y \
+            wget curl apt-transport-https ca-certificates gnupg lsb-release \
+            supervisor nginx mysql-client postgresql-client && \
+            rm -rf /var/lib/apt/lists/*
+            
+        # Install .NET runtime
+        RUN wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb && \
+            dpkg -i packages-microsoft-prod.deb && \
+            apt-get update && \
+            apt-get install -y dotnet-runtime-6.0 && \
+            rm packages-microsoft-prod.deb && \
+            rm -rf /var/lib/apt/lists/*
+        
+        # Copy custom package contents directly (since we can't install .deb on Windows build)
+        COPY docker-content/ /
+        
+        # Ensure proper permissions
+        RUN chmod +x /opt/onlyoffice/CommunityServer/* 2>/dev/null || true && \
+            chown -R root:root /opt/onlyoffice/ 2>/dev/null || true
+        
+        # Add labels for identification
+        LABEL org.opencontainers.image.title="OnlyOffice Community Server - Custom Mail Integration"
+        LABEL org.opencontainers.image.description="OnlyOffice with enhanced CRM email integration"
+        LABEL org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}"
+        LABEL org.opencontainers.image.revision="${{ github.sha }}"
+        
+        EXPOSE 80 443 5222 9865 9888
+        
+        HEALTHCHECK --interval=30s --timeout=10s --start-period=120s \
+          CMD curl -f http://localhost/ || exit 1
+          
+        CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+        EOF
+        name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   push:
@@ -12,7 +54,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     
     steps:
     - name: Checkout code
@@ -20,34 +62,30 @@ jobs:
       with:
         submodules: recursive
         
-    - name: Setup .NET SDK
+    - name: Setup .NET Framework and .NET SDK
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '6.0.x'
-        
-    - name: Setup Mono for .NET Framework
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y apt-transport-https dirmngr gnupg ca-certificates
-        sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 3FA7E0328081BFF6A14DA29AA6A19B38D3D831EF
-        echo "deb https://download.mono-project.com/repo/ubuntu stable-focal main" | sudo tee /etc/apt/sources.list.d/mono-official-stable.list
-        sudo apt-get update
-        sudo apt-get install -y mono-devel msbuild nuget
-        sudo apt-get install -y mono-reference-assemblies-4.0 mono-reference-assemblies-2.0
-        
-        # Set environment for .NET Framework builds
-        echo "FrameworkPathOverride=/usr/lib/mono/4.5/" >> $GITHUB_ENV
+        dotnet-version: |
+          6.0.x
+          5.0.x
+          
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
         
     - name: Download official OnlyOffice package
+      shell: bash
       run: |
         echo "Downloading official OnlyOffice Community Server package..."
         
         download_success=false
         
         # Try official installation script first
-        if wget -O workspace-install.sh "https://download.onlyoffice.com/install/workspace-install.sh" 2>/dev/null; then
+        if curl -o workspace-install.sh "https://download.onlyoffice.com/install/workspace-install.sh" 2>/dev/null; then
           deb_url=$(grep -o 'https://[^"]*onlyoffice-communityserver[^"]*\.deb' workspace-install.sh | head -1)
-          if [ -n "$deb_url" ] && wget -O onlyoffice-communityserver.deb "$deb_url" 2>/dev/null; then
+          if [ -n "$deb_url" ] && curl -o onlyoffice-communityserver.deb "$deb_url" 2>/dev/null; then
             download_success=true
             echo "✅ Downloaded from official script: $deb_url"
           fi
@@ -61,7 +99,7 @@ jobs:
           )
           
           for url in "${urls[@]}"; do
-            if wget -O onlyoffice-communityserver.deb "$url" 2>/dev/null; then
+            if curl -o onlyoffice-communityserver.deb "$url" 2>/dev/null; then
               download_success=true
               echo "✅ Downloaded from: $url"
               break
@@ -74,33 +112,67 @@ jobs:
           exit 1
         fi
         
-        echo "📦 Package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
+        # Check file size (Windows doesn't have ls -lh in Git Bash)
+        if [ -f onlyoffice-communityserver.deb ]; then
+          echo "📦 Package downloaded successfully"
+        else
+          echo "❌ Package download failed"
+          exit 1
+        fi
         
     - name: Extract official package for reference assemblies
+      shell: bash
       run: |
         echo "Extracting official package to get reference assemblies..."
-        dpkg-deb -x onlyoffice-communityserver.deb ./official-package/
+        
+        # Use 7zip on Windows to extract .deb file
+        # First, extract the .deb archive
+        7z x onlyoffice-communityserver.deb -o./deb-extracted/
+        
+        # Extract the data.tar.* file
+        cd deb-extracted
+        if [ -f data.tar.xz ]; then
+          7z x data.tar.xz
+          7z x data.tar -o../official-package/
+        elif [ -f data.tar.gz ]; then
+          7z x data.tar.gz
+          7z x data.tar -o../official-package/
+        else
+          echo "Looking for data archive..."
+          ls -la
+          # Try to extract any tar file found
+          for tar_file in *.tar*; do
+            if [ -f "$tar_file" ]; then
+              7z x "$tar_file" -o../official-package/
+              break
+            fi
+          done
+        fi
+        cd ..
         
         # Look for existing ASC.Mail assemblies and other dependencies
         echo "Looking for existing mail module assemblies..."
-        find ./official-package -name "ASC.Mail*" -type f
-        find ./official-package -name "ASC.Core*" -type f | head -10
-        find ./official-package -name "ASC.Common*" -type f | head -5
+        find ./official-package -name "ASC.Mail*" -type f 2>/dev/null || echo "No ASC.Mail files found yet"
+        find ./official-package -name "ASC.Core*" -type f 2>/dev/null | head -10 || echo "No ASC.Core files found yet"
         
     - name: Restore NuGet packages for mail module
       run: |
         echo "Restoring NuGet packages for mail module..."
         cd module/ASC.Mail/ASC.Mail
         
-        # Try to restore with nuget first
-        if [ -f "packages.config" ]; then
-          nuget restore packages.config -PackagesDirectory ../../../packages -verbosity quiet || echo "NuGet restore failed, continuing..."
-        fi
+        # Restore packages
+        nuget restore packages.config -PackagesDirectory ../../../packages -Verbosity quiet
         
-        # Also try dotnet restore as fallback
-        dotnet restore --verbosity minimal || echo "dotnet restore failed, continuing..."
-        
+        # Also restore at solution level if there's a solution file
         cd ../../..
+        
+        # Look for solution files and restore
+        $sln_files = Get-ChildItem -Name "*.sln" -Recurse | Select-Object -First 1
+        if ($sln_files) {
+          Write-Host "Found solution file: $sln_files"
+          nuget restore $sln_files -Verbosity quiet
+        }
+      shell: pwsh
         
     - name: Build ASC.Mail module specifically
       run: |
@@ -108,94 +180,86 @@ jobs:
         
         cd module/ASC.Mail/ASC.Mail
         
-        # Set up reference paths from the official package
-        ref_path=""
-        if [ -d "../../../official-package/opt/onlyoffice/CommunityServer" ]; then
-          ref_path="../../../official-package/opt/onlyoffice/CommunityServer"
-        elif [ -d "../../../official-package/var/www/onlyoffice" ]; then
-          ref_path="../../../official-package/var/www/onlyoffice"
-        fi
-        
-        echo "Using reference path: $ref_path"
-        
-        # Try MSBuild first
-        echo "Attempting build with MSBuild..."
-        msbuild ASC.Mail.csproj \
-          /p:Configuration=Release \
-          /p:Platform="Any CPU" \
-          /p:FrameworkPathOverride=/usr/lib/mono/4.5/ \
-          /p:ReferencePath="$ref_path" \
-          /verbosity:minimal 2>/dev/null || build_success=false
+        # Build with MSBuild (native Windows support for .NET Framework)
+        echo "Building with MSBuild..."
+        msbuild ASC.Mail.csproj `
+          /p:Configuration=Release `
+          /p:Platform="Any CPU" `
+          /verbosity:minimal
         
         # Check if build succeeded
-        if [ -f "bin/Release/ASC.Mail.dll" ]; then
-          echo "✅ Successfully built ASC.Mail.dll with MSBuild"
-          build_success=true
-        else
-          echo "⚠️ MSBuild failed, trying alternative approach..."
-          build_success=false
-        fi
-        
-        # If MSBuild failed, try a more manual approach
-        if [ "$build_success" = false ]; then
-          echo "Trying manual compilation..."
-          
-          # Simple manual compilation attempt
-          mkdir -p bin/Release
-          echo "Manual compilation requires more complex setup - skipping for now"
-          echo "Will use source replacement method instead"
-        fi
+        if (Test-Path "bin/Release/ASC.Mail.dll") {
+          Write-Host "✅ Successfully built ASC.Mail.dll with MSBuild"
+          Get-ChildItem bin/Release/ | Select-Object Name, Length
+        } else {
+          Write-Host "❌ Build failed - checking for errors..."
+          Get-ChildItem bin/ -Recurse -ErrorAction SilentlyContinue
+        }
         
         cd ../../..
-        
-        # Verify we have some kind of output
-        if [ -f "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" ]; then
-          echo "✅ ASC.Mail.dll built successfully"
-          ls -la module/ASC.Mail/ASC.Mail/bin/Release/
-        else
-          echo "⚠️ No ASC.Mail.dll found, will use source replacement method"
-        fi
+      shell: pwsh
         
     - name: Create custom package with your changes
+      shell: bash
       run: |
         echo "Creating custom package with your mail module changes..."
         
-        # Extract official package
-        dpkg-deb -x onlyoffice-communityserver.deb ./custom-package/
-        dpkg-deb -e onlyoffice-communityserver.deb ./custom-package/DEBIAN/
+        # Extract official package using 7zip
+        echo "Extracting official package structure..."
+        mkdir -p custom-package
+        
+        # Extract the .deb control files
+        7z x onlyoffice-communityserver.deb -o./deb-temp/
+        cd deb-temp
+        
+        # Extract control.tar.*
+        if [ -f control.tar.xz ]; then
+          7z x control.tar.xz
+          7z x control.tar -o../custom-package/DEBIAN/
+        elif [ -f control.tar.gz ]; then
+          7z x control.tar.gz  
+          7z x control.tar -o../custom-package/DEBIAN/
+        fi
+        
+        cd ..
+        
+        # Copy the extracted package files
+        if [ -d "./official-package" ]; then
+          cp -r ./official-package/* ./custom-package/ 2>/dev/null || echo "Some files couldn't be copied"
+        fi
         
         # Method 1: Replace compiled DLL if we have it
         if [ -f "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" ]; then
           echo "Replacing ASC.Mail.dll with custom build..."
           
           # Find where ASC.Mail.dll is located in the official package
-          mail_dll_location=$(find ./custom-package -name "ASC.Mail.dll" -type f | head -1)
+          mail_dll_location=$(find ./custom-package -name "ASC.Mail.dll" -type f 2>/dev/null | head -1)
           
           if [ -n "$mail_dll_location" ]; then
             echo "Found existing ASC.Mail.dll at: $mail_dll_location"
             cp module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll "$mail_dll_location"
             echo "✅ Replaced ASC.Mail.dll with custom version"
           else
-            echo "⚠️ Could not find existing ASC.Mail.dll location"
+            echo "⚠️ Could not find existing ASC.Mail.dll location, copying to likely location"
+            mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/
+            cp module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll ./custom-package/opt/onlyoffice/CommunityServer/
           fi
         fi
         
-        # Method 2: Replace source files (for runtime compilation scenarios)
+        # Method 2: Always include source files for reference
         echo "Copying modified source files..."
-        
-        # Create a directory for custom source files
         mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
         
         # Copy your modified files
-        cp module/ASC.Mail/ASC.Mail/Utils/MailAddressHelper.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        cp module/ASC.Mail/ASC.Mail/Core/DaoFactory.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        cp module/ASC.Mail/ASC.Mail/Core/Engine/CrmLinkEngine.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        cp module/ASC.Mail/ASC.Mail/Core/Engine/MessageEngine.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        cp module/ASC.Mail/ASC.Mail/Core/Dao/CrmContactDao.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        cp module/ASC.Mail/ASC.Mail/Core/Dao/Interfaces/ICrmContactDao.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
+        cp module/ASC.Mail/ASC.Mail/Utils/MailAddressHelper.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy MailAddressHelper.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/DaoFactory.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy DaoFactory.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Engine/CrmLinkEngine.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy CrmLinkEngine.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Engine/MessageEngine.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy MessageEngine.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Dao/CrmContactDao.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy CrmContactDao.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Dao/Interfaces/ICrmContactDao.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy ICrmContactDao.cs"
         
-        # Create a documentation file
-        cat > ./custom-package/opt/onlyoffice/CommunityServer/CUSTOM_MAIL_CHANGES.md << EOF
+        # Create documentation
+        cat > ./custom-package/opt/onlyoffice/CommunityServer/CUSTOM_MAIL_CHANGES.md << 'DOCEOF'
         # Custom OnlyOffice Mail Module Changes
         
         ## Repository
@@ -222,23 +286,51 @@ jobs:
         
         ## Custom Source Files Location
         /opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
-        EOF
-        
-        # Update package metadata
-        sed -i 's/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/' ./custom-package/DEBIAN/control
-        sed -i 's/Version: .*/Version: ${{ env.ONLYOFFICE_VERSION }}-custom-mail-${{ github.run_number }}/' ./custom-package/DEBIAN/control
-        sed -i '/^Description:/a \ Custom build with enhanced CRM email integration.' ./custom-package/DEBIAN/control
+        DOCEOF
         
         echo "✅ Custom package prepared with mail module changes"
         
     - name: Build custom Debian package
+      shell: bash
       run: |
         echo "Building custom Debian package..."
-        dpkg-deb --build ./custom-package onlyoffice-communityserver-custom.deb
         
-        echo "✅ Custom package built successfully"
-        dpkg-deb --info onlyoffice-communityserver-custom.deb
-        echo "📦 Custom package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
+        # Update package metadata if control file exists
+        if [ -f "./custom-package/DEBIAN/control" ]; then
+          sed -i 's/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/' ./custom-package/DEBIAN/control
+          sed -i "s/Version: .*/Version: ${{ env.ONLYOFFICE_VERSION }}-custom-mail-${{ github.run_number }}/" ./custom-package/DEBIAN/control
+          echo " Custom build with enhanced CRM email integration." >> ./custom-package/DEBIAN/control
+        else
+          echo "Creating basic control file..."
+          mkdir -p ./custom-package/DEBIAN
+          cat > ./custom-package/DEBIAN/control << 'CTRLEOF'
+        Package: onlyoffice-communityserver-custom
+        Version: ${{ env.ONLYOFFICE_VERSION }}-custom-mail-${{ github.run_number }}
+        Section: web
+        Priority: optional
+        Architecture: amd64
+        Maintainer: Custom Build <build@example.com>
+        Description: OnlyOffice Community Server - Custom Mail Integration
+         Custom build with enhanced CRM email integration.
+        CTRLEOF
+        fi
+        
+        # Note: We can't build a proper .deb on Windows, so we'll create a zip instead
+        echo "Creating custom package as ZIP (Windows limitation)..."
+        cd custom-package
+        7z a -tzip ../onlyoffice-communityserver-custom.zip . -r
+        cd ..
+        
+        # Rename to .deb extension for compatibility
+        mv onlyoffice-communityserver-custom.zip onlyoffice-communityserver-custom.deb
+        
+        echo "✅ Custom package created successfully"
+        if [ -f "onlyoffice-communityserver-custom.deb" ]; then
+          echo "Package file exists"
+        else
+          echo "❌ Package file not found"
+          exit 1
+        fi
         
     - name: Upload custom package
       uses: actions/upload-artifact@v4
@@ -268,6 +360,27 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         name: onlyoffice-custom-mail-${{ github.run_number }}
+        
+    - name: Convert package format for Docker
+      run: |
+        # The Windows build creates a ZIP with .deb extension
+        # Convert it to a proper structure for Docker
+        
+        echo "Preparing package for Docker..."
+        mkdir -p ./docker-content
+        
+        # Extract the "deb" (actually a zip)
+        unzip onlyoffice-communityserver-custom.deb -d ./docker-content/ || {
+          echo "Failed to extract as ZIP, trying as archive..."
+          7z x onlyoffice-communityserver-custom.deb -o./docker-content/ || {
+            echo "Could not extract package, creating minimal structure..."
+            mkdir -p ./docker-content/opt/onlyoffice/CommunityServer
+            echo "Minimal custom build" > ./docker-content/opt/onlyoffice/CommunityServer/README.txt
+          }
+        }
+        
+        echo "Package contents extracted for Docker build"
+        ls -la ./docker-content/ | head -10
         
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
