@@ -2,9 +2,9 @@ name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ main ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ main ]
   workflow_dispatch:
 
 env:
@@ -36,45 +36,22 @@ jobs:
     - name: Download official OnlyOffice package
       shell: bash
       run: |
-        echo "Downloading official OnlyOffice Community Server package..."
+        echo "Using custom download script..."
         
-        download_success=false
-        
-        # Try official installation script first
-        if curl -o workspace-install.sh "https://download.onlyoffice.com/install/workspace-install.sh" 2>/dev/null; then
-          deb_url=$(grep -o 'https://[^"]*onlyoffice-communityserver[^"]*\.deb' workspace-install.sh | head -1)
-          if [ -n "$deb_url" ] && curl -o onlyoffice-communityserver.deb "$deb_url" 2>/dev/null; then
-            download_success=true
-            echo "✅ Downloaded from official script: $deb_url"
-          fi
-        fi
-        
-        # Fallback URLs
-        if [ "$download_success" = false ]; then
-          urls=(
-            "https://download.onlyoffice.com/install/communityserver/linux/onlyoffice-communityserver_latest_amd64.deb"
-            "https://download.onlyoffice.com/install/workspace/community/linux/onlyoffice-communityserver_latest_amd64.deb"
-          )
+        # Make the script executable and run it
+        if [ -f ".github/build-scripts/download-deb.sh" ]; then
+          chmod +x .github/build-scripts/download-deb.sh
+          ./.github/build-scripts/download-deb.sh
           
-          for url in "${urls[@]}"; do
-            if curl -o onlyoffice-communityserver.deb "$url" 2>/dev/null; then
-              download_success=true
-              echo "✅ Downloaded from: $url"
-              break
-            fi
-          done
-        fi
-        
-        if [ "$download_success" = false ]; then
-          echo "❌ Failed to download official package"
-          exit 1
-        fi
-        
-        # Check file size (Windows doesn't have ls -lh in Git Bash)
-        if [ -f onlyoffice-communityserver.deb ]; then
-          echo "📦 Package downloaded successfully"
+          # Verify the script worked
+          if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
+            echo "✅ Successfully downloaded OnlyOffice package using custom script"
+          else
+            echo "❌ Custom script failed to download package"
+            exit 1
+          fi
         else
-          echo "❌ Package download failed"
+          echo "❌ Custom download script not found at .github/build-scripts/download-deb.sh"
           exit 1
         fi
         
