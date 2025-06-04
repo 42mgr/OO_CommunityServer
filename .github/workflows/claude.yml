@@ -64,7 +64,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: official-package/
-        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') || 'no-deb' }}
+        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') }}
         restore-keys: |
           onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-
           onlyoffice-extracted-v2-
@@ -211,7 +211,7 @@ jobs:
   build-mail-module:
     needs: prepare-environment
     runs-on: windows-latest
-    if: needs.prepare-environment.outputs.skip-build != 'true' || github.event.inputs.force_rebuild == 'true'
+    if: (needs.prepare-environment.outputs.skip-build != 'true' || github.event.inputs.force_rebuild == 'true') && needs.prepare-environment.result == 'success'
     
     outputs:
       build-success: ${{ steps.verify-build.outputs.success }}
@@ -498,13 +498,23 @@ jobs:
   create-custom-package:
     needs: [prepare-environment, build-mail-module]
     runs-on: ubuntu-latest
-    if: always() && needs.prepare-environment.result == 'success'
+    if: always() && (needs.prepare-environment.result == 'success' || needs.prepare-environment.result == 'skipped')
     
     steps:
     - name: Checkout code (for fallback)
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
+        
+    - name: Check job dependencies
+      run: |
+        echo "=== JOB DEPENDENCY STATUS ==="
+        echo "prepare-environment result: ${{ needs.prepare-environment.result }}"
+        echo "build-mail-module result: ${{ needs.build-mail-module.result }}"
+        echo "prepare-environment outputs:"
+        echo "  cache-hit-deb: ${{ needs.prepare-environment.outputs.cache-hit-deb }}"
+        echo "  cache-hit-extracted: ${{ needs.prepare-environment.outputs.cache-hit-extracted }}"
+        echo "  skip-build: ${{ needs.prepare-environment.outputs.skip-build }}"
         
     - name: Try to restore cached package
       id: restore-cache
@@ -513,7 +523,7 @@ jobs:
         path: |
           onlyoffice-communityserver.deb
           official-package/
-        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') || 'no-deb' }}
+        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') }}
         restore-keys: |
           onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-
           onlyoffice-extracted-v2-
@@ -521,6 +531,7 @@ jobs:
     - name: Download artifacts from preparation job (fallback)
       if: steps.restore-cache.outputs.cache-hit != 'true'
       uses: actions/download-artifact@v4
+      continue-on-error: true
       with:
         name: extracted-onlyoffice-package
         
