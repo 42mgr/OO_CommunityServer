@@ -248,7 +248,7 @@ jobs:
           echo "nuget_cached=false" >> $env:GITHUB_OUTPUT
         }
         
-- name: Fix ALL project reference metadata systematically
+    - name: Fix ALL project reference metadata systematically
       shell: pwsh
       run: |
         Write-Host "=== COMPREHENSIVE PROJECT REFERENCE METADATA FIX ==="
