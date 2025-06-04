@@ -114,6 +114,46 @@ jobs:
       with:
         name: extracted-onlyoffice-package
         
+    - name: Fix project configurations before build
+      shell: pwsh
+      run: |
+        Write-Host "Fixing MSBuild project configurations..."
+        
+        # Find all .csproj files that might have configuration issues
+        $problematic_projects = Get-ChildItem -Path "." -Name "*.csproj" -Recurse | Where-Object { 
+          $_ -like "*Mail.Server*" -or $_ -like "*ASC.Mail.Server*" 
+        }
+        
+        foreach ($proj in $problematic_projects) {
+          Write-Host "Checking project: $proj"
+          
+          if (Test-Path $proj) {
+            $content = Get-Content $proj -Raw
+            
+            # Check if the project has proper PropertyGroup for Release|Any CPU
+            if ($content -notmatch '<PropertyGroup[^>]*Condition[^>]*Release.*Any CPU') {
+              Write-Host "Adding missing Release|Any CPU configuration to $proj"
+              
+              # Add the missing configuration
+              $newConfig = @"
+  <PropertyGroup Condition=" `'`$(Configuration)|`$(Platform)`' == `'Release|Any CPU`' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+"@
+              
+              # Insert before the closing </Project> tag
+              $content = $content -replace '</Project>', ($newConfig + "`r`n</Project>")
+              Set-Content -Path $proj -Value $content
+              Write-Host "✅ Fixed configuration for $proj"
+            }
+          }
+        }
+        
     - name: Restore NuGet packages for mail module
       shell: pwsh
       run: |
