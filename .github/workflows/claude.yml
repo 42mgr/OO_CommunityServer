@@ -2,9 +2,9 @@ name: Build OnlyOffice Community Server
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ main ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ main ]
   workflow_dispatch:  # Allow manual trigger
 
 env:
@@ -40,11 +40,12 @@ jobs:
           build-essential \
           devscripts \
           debhelper \
-          dh-systemd \
           python3-dev \
           python3-pip \
           wget \
-          curl
+          curl \
+          dpkg-dev \
+          fakeroot
           
     # Cache the original OnlyOffice package to avoid re-downloading
     - name: Cache OnlyOffice original package
