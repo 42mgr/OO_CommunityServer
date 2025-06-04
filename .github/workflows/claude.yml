@@ -169,7 +169,7 @@ jobs:
           official-package/
         retention-days: 1
 
-build-mail-module:
+  build-mail-module:
     needs: download-and-prepare
     runs-on: windows-latest
     
@@ -497,7 +497,7 @@ build-mail-module:
           build-report.md
         retention-days: 3
 
-create-custom-package:
+  create-custom-package:
     needs: [download-and-prepare, build-mail-module]
     runs-on: ubuntu-latest
     if: always() && needs.download-and-prepare.result == 'success'
@@ -658,7 +658,7 @@ create-custom-package:
         path: onlyoffice-communityserver-custom.deb
         retention-days: 30
 
-build-docker:
+  build-docker:
     needs: create-custom-package
     runs-on: ubuntu-latest
     if: needs.create-custom-package.result == 'success'
