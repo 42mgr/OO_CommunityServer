@@ -658,7 +658,7 @@ create-custom-package:
         path: onlyoffice-communityserver-custom.deb
         retention-days: 30
 
-  build-docker:
+build-docker:
     needs: create-custom-package
     runs-on: ubuntu-latest
     if: needs.create-custom-package.result == 'success'
