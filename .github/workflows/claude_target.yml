@@ -32,85 +32,7 @@ jobs:
       
     - name: Setup NuGet
       uses: nuget/setup-nuget@v2
-        
-    - name: Download official OnlyOffice package
-      shell: bash
-      run: |
-        cat > Dockerfile << 'EOF'
-        FROM ubuntu:20.04
-        
-        ENV DEBIAN_FRONTEND=noninteractive
-        
-        # Install dependencies
-        RUN apt-get update && \
-            apt-get install -y \
-            wget curl apt-transport-https ca-certificates gnupg lsb-release \
-            supervisor nginx mysql-client postgresql-client && \
-            rm -rf /var/lib/apt/lists/*
-            
-        # Install .NET runtime
-        RUN wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb && \
-            dpkg -i packages-microsoft-prod.deb && \
-            apt-get update && \
-            apt-get install -y dotnet-runtime-6.0 && \
-            rm packages-microsoft-prod.deb && \
-            rm -rf /var/lib/apt/lists/*
-        
-        # Copy custom package contents directly (since we can't install .deb on Windows build)
-        COPY docker-content/ /
-        
-        # Ensure proper permissions
-        RUN chmod +x /opt/onlyoffice/CommunityServer/* 2>/dev/null || true && \
-            chown -R root:root /opt/onlyoffice/ 2>/dev/null || true
-        
-        # Add labels for identification
-        LABEL org.opencontainers.image.title="OnlyOffice Community Server - Custom Mail Integration"
-        LABEL org.opencontainers.image.description="OnlyOffice with enhanced CRM email integration"
-        LABEL org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}"
-        LABEL org.opencontainers.image.revision="${{ github.sha }}"
-        
-        EXPOSE 80 443 5222 9865 9888
-        
-        HEALTHCHECK --interval=30s --timeout=10s --start-period=120s \
-          CMD curl -f http://localhost/ || exit 1
-          
-        CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
-        EOF
-        name: Build Custom OnlyOffice with Mail Module Changes
-
-on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
-  workflow_dispatch:
-
-env:
-  ONLYOFFICE_VERSION: "12.0.0"
-
-jobs:
-  build:
-    runs-on: windows-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        
-    - name: Setup .NET Framework and .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: |
-          6.0.x
-          5.0.x
-          
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
       
-    - name: Setup NuGet
-      uses: nuget/setup-nuget@v2
-        
     - name: Download official OnlyOffice package
       shell: bash
       run: |
@@ -192,32 +114,32 @@ jobs:
         find ./official-package -name "ASC.Core*" -type f 2>/dev/null | head -10 || echo "No ASC.Core files found yet"
         
     - name: Restore NuGet packages for mail module
+      shell: pwsh
       run: |
-        echo "Restoring NuGet packages for mail module..."
-        cd module/ASC.Mail/ASC.Mail
+        Write-Host "Restoring NuGet packages for mail module..."
+        Set-Location "module/ASC.Mail/ASC.Mail"
         
         # Restore packages
         nuget restore packages.config -PackagesDirectory ../../../packages -Verbosity quiet
         
         # Also restore at solution level if there's a solution file
-        cd ../../..
+        Set-Location "../../.."
         
-        # Look for solution files and restore
         $sln_files = Get-ChildItem -Name "*.sln" -Recurse | Select-Object -First 1
         if ($sln_files) {
           Write-Host "Found solution file: $sln_files"
           nuget restore $sln_files -Verbosity quiet
         }
-      shell: pwsh
         
     - name: Build ASC.Mail module specifically
+      shell: pwsh
       run: |
-        echo "Building ASC.Mail module with your custom changes..."
+        Write-Host "Building ASC.Mail module with your custom changes..."
         
-        cd module/ASC.Mail/ASC.Mail
+        Set-Location "module/ASC.Mail/ASC.Mail"
         
         # Build with MSBuild (native Windows support for .NET Framework)
-        echo "Building with MSBuild..."
+        Write-Host "Building with MSBuild..."
         msbuild ASC.Mail.csproj `
           /p:Configuration=Release `
           /p:Platform="Any CPU" `
@@ -232,8 +154,7 @@ jobs:
           Get-ChildItem bin/ -Recurse -ErrorAction SilentlyContinue
         }
         
-        cd ../../..
-      shell: pwsh
+        Set-Location "../../.."
         
     - name: Create custom package with your changes
       shell: bash
@@ -442,11 +363,13 @@ jobs:
             apt-get install -y dotnet-runtime-6.0 && \
             rm packages-microsoft-prod.deb && \
             rm -rf /var/lib/apt/lists/*
-            
-        # Install custom OnlyOffice package with mail module changes
-        COPY onlyoffice-communityserver-custom.deb /tmp/
-        RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
-            rm /tmp/onlyoffice-communityserver-custom.deb
+        
+        # Copy custom package contents directly (since we can't install .deb on Windows build)
+        COPY docker-content/ /
+        
+        # Ensure proper permissions
+        RUN chmod +x /opt/onlyoffice/CommunityServer/* 2>/dev/null || true && \
+            chown -R root:root /opt/onlyoffice/ 2>/dev/null || true
         
         # Add labels for identification
         LABEL org.opencontainers.image.title="OnlyOffice Community Server - Custom Mail Integration"
