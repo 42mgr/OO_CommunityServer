@@ -1,0 +1,328 @@
+name: Build OnlyOffice Community Server
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  ONLYOFFICE_VERSION: "12.0.0"  # Update this as needed
+  DOTNET_VERSION: "6.0.x"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0  # Full history for better caching
+        
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          devscripts \
+          debhelper \
+          dh-systemd \
+          python3-dev \
+          python3-pip \
+          wget \
+          curl
+          
+    # Cache the original OnlyOffice package to avoid re-downloading
+    - name: Cache OnlyOffice original package
+      id: cache-onlyoffice
+      uses: actions/cache@v4
+      with:
+        path: |
+          onlyoffice-communityserver.deb
+          official-package/
+        key: onlyoffice-${{ env.ONLYOFFICE_VERSION }}-${{ runner.os }}
+        
+    - name: Download original OnlyOffice package
+      if: steps.cache-onlyoffice.outputs.cache-hit != 'true'
+      run: |
+        # Try multiple download sources for redundancy
+        download_success=false
+        
+        # Try direct download first
+        if wget -O onlyoffice-communityserver.deb \
+          "https://download.onlyoffice.com/install/communityserver/linux/onlyoffice-communityserver_latest_amd64.deb" 2>/dev/null; then
+          download_success=true
+        fi
+        
+        # Fallback: Try GitHub releases
+        if [ "$download_success" = false ]; then
+          echo "Direct download failed, trying GitHub releases..."
+          latest_url=$(curl -s https://api.github.com/repos/ONLYOFFICE/CommunityServer/releases/latest | grep "browser_download_url.*\.deb" | cut -d '"' -f 4 | head -1)
+          if [ -n "$latest_url" ]; then
+            wget -O onlyoffice-communityserver.deb "$latest_url" && download_success=true
+          fi
+        fi
+        
+        # Fallback: Use a known working version
+        if [ "$download_success" = false ]; then
+          echo "GitHub download failed, using known working version..."
+          wget -O onlyoffice-communityserver.deb \
+            "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v12.0.0/onlyoffice-communityserver_12.0.0_amd64.deb" || true
+        fi
+        
+        # Verify download
+        if [ ! -f onlyoffice-communityserver.deb ] || [ ! -s onlyoffice-communityserver.deb ]; then
+          echo "ERROR: Failed to download OnlyOffice package"
+          exit 1
+        fi
+        
+        # Extract assets
+        dpkg-deb -x onlyoffice-communityserver.deb ./official-package/
+        
+    # Cache .NET dependencies
+    - name: Cache .NET packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.sln') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+          
+    - name: Restore .NET dependencies
+      run: |
+        dotnet restore --verbosity minimal
+        
+    - name: Build .NET solution
+      run: |
+        dotnet build --configuration Release --no-restore --verbosity minimal
+        
+    - name: Publish .NET application
+      run: |
+        dotnet publish --configuration Release --no-build --output ./publish --verbosity minimal
+        
+    - name: Build frontend assets (if available)
+      run: |
+        if [ -d "web" ]; then
+          echo "Building frontend assets..."
+          cd web
+          if [ -f "package.json" ]; then
+            npm ci --silent
+            npm run build --if-present
+          fi
+          cd ..
+        else
+          echo "No frontend assets to build"
+        fi
+        
+    - name: Prepare package structure
+      run: |
+        echo "Creating package structure..."
+        mkdir -p ./package-build/{opt/onlyoffice/CommunityServer,var/www/onlyoffice,etc/onlyoffice,usr/share/onlyoffice}
+        
+        # Copy your compiled binaries (this is your custom code!)
+        echo "Copying custom compiled binaries..."
+        cp -r ./publish/* ./package-build/opt/onlyoffice/CommunityServer/
+        
+        # Copy ALL assets from official package
+        echo "Copying assets from official package..."
+        if [ -d "./official-package/var/www/onlyoffice" ]; then
+          cp -r ./official-package/var/www/onlyoffice/* ./package-build/var/www/onlyoffice/
+        fi
+        
+        if [ -d "./official-package/etc/onlyoffice" ]; then
+          cp -r ./official-package/etc/onlyoffice/* ./package-build/etc/onlyoffice/
+        fi
+        
+        if [ -d "./official-package/usr/share/onlyoffice" ]; then
+          cp -r ./official-package/usr/share/onlyoffice/* ./package-build/usr/share/onlyoffice/
+        fi
+        
+        # Copy database scripts and other initialization files
+        echo "Copying database and initialization scripts..."
+        if [ -d "./official-package/opt/onlyoffice" ]; then
+          find ./official-package/opt/onlyoffice -name "*.sql" -exec cp {} ./package-build/opt/onlyoffice/CommunityServer/ \; 2>/dev/null || true
+          find ./official-package/opt/onlyoffice -type d -name "*migration*" -exec cp -r {} ./package-build/opt/onlyoffice/CommunityServer/ \; 2>/dev/null || true
+          find ./official-package/opt/onlyoffice -name "*.sh" -exec cp {} ./package-build/opt/onlyoffice/CommunityServer/ \; 2>/dev/null || true
+        fi
+        
+        # Copy systemd and init scripts
+        if [ -d "./official-package/etc/systemd" ]; then
+          mkdir -p ./package-build/etc/systemd
+          cp -r ./official-package/etc/systemd/* ./package-build/etc/systemd/
+        fi
+        
+        if [ -d "./official-package/etc/init.d" ]; then
+          mkdir -p ./package-build/etc/init.d
+          cp -r ./official-package/etc/init.d/* ./package-build/etc/init.d/
+        fi
+        
+    - name: Create Debian control files
+      run: |
+        mkdir -p ./package-build/DEBIAN
+        
+        # Main control file
+        cat > ./package-build/DEBIAN/control << EOF
+        Package: onlyoffice-communityserver-custom
+        Version: ${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}
+        Section: web
+        Priority: optional
+        Architecture: amd64
+        Depends: dotnet-runtime-6.0, nginx, mysql-server | postgresql
+        Maintainer: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+        Description: OnlyOffice Community Server (Custom Build)
+         Custom build of OnlyOffice Community Server with enhanced CRM email integration.
+         Built from: ${{ github.server_url }}/${{ github.repository }}
+         Commit: ${{ github.sha }}
+        EOF
+        
+        # Post-installation script
+        cat > ./package-build/DEBIAN/postinst << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        # Create onlyoffice user if it doesn't exist
+        if ! id "onlyoffice" >/dev/null 2>&1; then
+            useradd -r -s /bin/false -d /var/www/onlyoffice onlyoffice
+        fi
+        
+        # Create necessary directories
+        mkdir -p /var/log/onlyoffice /var/www/onlyoffice/Data
+        
+        # Set permissions
+        chown -R onlyoffice:onlyoffice /opt/onlyoffice/ 2>/dev/null || true
+        chown -R onlyoffice:onlyoffice /var/www/onlyoffice/ 2>/dev/null || true
+        chown -R onlyoffice:onlyoffice /var/log/onlyoffice/ 2>/dev/null || true
+        
+        # Enable and start services
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl daemon-reload || true
+            systemctl enable onlyoffice 2>/dev/null || true
+        fi
+        
+        exit 0
+        EOF
+        
+        chmod +x ./package-build/DEBIAN/postinst
+        
+    - name: Build Debian package
+      run: |
+        echo "Building Debian package..."
+        dpkg-deb --build ./package-build onlyoffice-communityserver-custom.deb
+        
+        # Verify package
+        dpkg-deb --info onlyoffice-communityserver-custom.deb
+        echo "Package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
+        
+    - name: Upload Debian package
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-custom-deb-${{ github.run_number }}
+        path: onlyoffice-communityserver-custom.deb
+        retention-days: 30
+        
+  docker:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Download Debian package
+      uses: actions/download-artifact@v4
+      with:
+        name: onlyoffice-custom-deb-${{ github.run_number }}
+        
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Docker Hub (optional)
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        
+    - name: Create Dockerfile
+      run: |
+        cat > Dockerfile << 'EOF'
+        FROM ubuntu:20.04
+        
+        # Prevent interactive prompts
+        ENV DEBIAN_FRONTEND=noninteractive
+        
+        # Install dependencies
+        RUN apt-get update && \
+            apt-get install -y \
+            wget \
+            curl \
+            apt-transport-https \
+            ca-certificates \
+            gnupg \
+            lsb-release \
+            supervisor \
+            nginx \
+            mysql-client \
+            postgresql-client \
+            && rm -rf /var/lib/apt/lists/*
+            
+        # Install .NET runtime
+        RUN wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb && \
+            dpkg -i packages-microsoft-prod.deb && \
+            apt-get update && \
+            apt-get install -y dotnet-runtime-6.0 && \
+            rm packages-microsoft-prod.deb && \
+            rm -rf /var/lib/apt/lists/*
+            
+        # Copy and install custom package
+        COPY onlyoffice-communityserver-custom.deb /tmp/
+        RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
+            rm /tmp/onlyoffice-communityserver-custom.deb
+        
+        # Expose ports
+        EXPOSE 80 443 5222 9865 9888
+        
+        # Health check
+        HEALTHCHECK --interval=30s --timeout=10s --start-period=120s \
+          CMD curl -f http://localhost/health || curl -f http://localhost/ || exit 1
+          
+        # Use supervisor to manage services
+        CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+        EOF
+        
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/onlyoffice-custom:latest
+          ${{ secrets.DOCKER_USERNAME }}/onlyoffice-custom:${{ github.run_number }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Save Docker image (for manual use)
+      run: |
+        docker build -t onlyoffice-custom:latest .
+        docker save onlyoffice-custom:latest | gzip > onlyoffice-custom-image.tar.gz
+        
+    - name: Upload Docker image
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-custom-image-${{ github.run_number }}
+        path: onlyoffice-custom-image.tar.gz
+        retention-days: 7
