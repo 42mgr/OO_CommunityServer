@@ -501,7 +501,13 @@ jobs:
     if: always() && needs.prepare-environment.result == 'success'
     
     steps:
-    - name: Download cached package
+    - name: Checkout code (for fallback)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        
+    - name: Try to restore cached package
+      id: restore-cache
       uses: actions/cache/restore@v4
       with:
         path: |
@@ -510,7 +516,73 @@ jobs:
         key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') || 'no-deb' }}
         restore-keys: |
           onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-
+          onlyoffice-extracted-v2-
           
+    - name: Download artifacts from preparation job (fallback)
+      if: steps.restore-cache.outputs.cache-hit != 'true'
+      uses: actions/download-artifact@v4
+      with:
+        name: extracted-onlyoffice-package
+        
+    - name: Verify package availability
+      run: |
+        echo "🔍 Checking package availability..."
+        
+        if [ -d "official-package" ] && [ -f "onlyoffice-communityserver.deb" ]; then
+          echo "✅ Package available from cache/artifacts"
+          echo "📦 DEB size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
+          echo "📁 Extracted files: $(find official-package -type f | wc -l)"
+        else
+          echo "❌ Package not available, need to download and extract"
+          
+          # Emergency download if nothing is available
+          echo "🚨 Emergency package download..."
+          
+          # Install dependencies
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends wget dpkg-dev
+          
+          # Download using the same logic as prepare job
+          VERSIONS_TO_TRY=("${{ env.ONLYOFFICE_VERSION }}" $(echo "${{ env.FALLBACK_VERSIONS }}" | tr ',' ' '))
+          
+          download_success=false
+          
+          for version in "${VERSIONS_TO_TRY[@]}"; do
+            echo "🔄 Emergency download attempt for version: $version"
+            
+            DOWNLOAD_URLS=(
+              "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v${version}/onlyoffice-communityserver_amd64.deb"
+              "https://github.com/ONLYOFFICE/CommunityServer/releases/download/v${version}/onlyoffice-communityserver_${version}_amd64.deb"
+            )
+            
+            for url in "${DOWNLOAD_URLS[@]}"; do
+              if wget --timeout=60 --tries=2 "$url" -O onlyoffice-communityserver.deb 2>/dev/null; then
+                if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
+                  file_size=$(stat -c%s onlyoffice-communityserver.deb)
+                  if [ "$file_size" -gt 50000000 ]; then
+                    echo "✅ Emergency download successful! Version: $version"
+                    download_success=true
+                    break 2
+                  fi
+                fi
+              fi
+            done
+          done
+          
+          if [ "$download_success" = false ]; then
+            echo "❌ Emergency download failed"
+            exit 1
+          fi
+          
+          # Extract the package
+          echo "📦 Emergency extraction..."
+          mkdir -p official-package
+          dpkg-deb -x onlyoffice-communityserver.deb official-package/
+          dpkg-deb -e onlyoffice-communityserver.deb official-package/DEBIAN/
+          
+          echo "✅ Emergency package preparation complete"
+        fi
+        
     - name: Download build artifacts (conditional)
       if: needs.build-mail-module.outputs.build-success == 'true'
       uses: actions/download-artifact@v4
@@ -523,8 +595,20 @@ jobs:
       run: |
         echo "🚀 Fast package creation..."
         
+        # Verify we have the source package
+        if [ ! -d "official-package" ]; then
+          echo "❌ official-package directory still not found!"
+          echo "Available directories:"
+          ls -la
+          exit 1
+        fi
+        
         # Quick copy
+        echo "📋 Copying package structure..."
         cp -r official-package custom-package
+        
+        echo "✅ Package structure copied"
+        echo "📊 Files in custom package: $(find custom-package -type f | wc -l)"
         
         # Replace mail module if we have a new one  
         if [ -d "build-output/" ]; then
