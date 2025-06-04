@@ -2,9 +2,9 @@ name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ main ]
+    branches: [ master, main ]
   workflow_dispatch:
 
 env:
@@ -141,7 +141,7 @@ jobs:
           echo "Trying manual compilation..."
           
           # Create a simple build script
-          cat > build_manual.sh << 'EOF'
+          cat > build_manual.sh << 'EOFSCRIPT'
 #!/bin/bash
 # Find all C# files in the project
 cs_files=$(find . -name "*.cs" -not -path "./obj/*" -not -path "./bin/*")
@@ -154,8 +154,8 @@ mcs -target:library \
     -r:System.Data.dll \
     -r:System.Web.dll \
     -r:System.Configuration.dll \
-    $cs_files 2>/dev/null || echo "Manual compilation also failed"
-EOF
+    ${cs_files} 2>/dev/null || echo "Manual compilation also failed"
+EOFSCRIPT
           
           chmod +x build_manual.sh
           mkdir -p bin/Release
