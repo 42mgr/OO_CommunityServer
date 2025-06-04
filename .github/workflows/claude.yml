@@ -1,18 +1,17 @@
-name: Build OnlyOffice Community Server
+name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ main ]
-  workflow_dispatch:  # Allow manual trigger
+    branches: [ master, main ]
+  workflow_dispatch:
 
 env:
-  ONLYOFFICE_VERSION: "12.0.0"  # Update this as needed
-  DOTNET_VERSION: "6.0.x"
+  ONLYOFFICE_VERSION: "12.0.0"
 
 jobs:
-  build:
+  download-and-prepare:
     runs-on: ubuntu-latest
     
     steps:
@@ -20,335 +19,288 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        fetch-depth: 0  # Full history for better caching
         
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-        
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        # Remove cache since there's no package-lock.json in repo root
-        
-    - name: Install system dependencies
+    - name: Download official OnlyOffice package
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          devscripts \
-          debhelper \
-          python3-dev \
-          python3-pip \
-          wget \
-          curl \
-          dpkg-dev \
-          fakeroot
-          
-    # Cache the original OnlyOffice package to avoid re-downloading
-    - name: Cache OnlyOffice original package
-      id: cache-onlyoffice
-      uses: actions/cache@v4
-      with:
-        path: |
-          onlyoffice-communityserver.deb
-          official-package/
-        key: onlyoffice-${{ env.ONLYOFFICE_VERSION }}-${{ runner.os }}
+        echo "Using custom download script on Linux..."
         
-    - name: Download original OnlyOffice package
-      if: steps.cache-onlyoffice.outputs.cache-hit != 'true'
-      run: |
-        download_success=false
-        
-        # First try: Official installation script approach
-        if wget -O workspace-install.sh "https://download.onlyoffice.com/install/workspace-install.sh" 2>/dev/null; then
-          echo "Downloaded official installation script"
-          # Extract the .deb download URL from the script
-          deb_url=$(grep -o 'https://[^"]*onlyoffice-communityserver[^"]*\.deb' workspace-install.sh | head -1)
-          if [ -n "$deb_url" ]; then
-            echo "Found .deb URL in script: $deb_url"
-            if wget -O onlyoffice-communityserver.deb "$deb_url" 2>/dev/null; then
-              download_success=true
-              echo "Successfully downloaded from official script URL"
-            fi
-          fi
-        fi
-        
-        # Second try: Use your custom build script if available
-        if [ "$download_success" = false ] && [ -f ".github/build-scripts/download-deb.sh" ]; then
-          echo "Trying custom build script..."
+        # Make the script executable and run it (should work perfectly on Linux)
+        if [ -f ".github/build-scripts/download-deb.sh" ]; then
           chmod +x .github/build-scripts/download-deb.sh
-          if ./.github/build-scripts/download-deb.sh; then
-            download_success=true
-            echo "Successfully downloaded using custom script"
+          ./.github/build-scripts/download-deb.sh
+          
+          # Verify the script worked
+          if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
+            echo "✅ Successfully downloaded OnlyOffice package"
+            dpkg-deb --info onlyoffice-communityserver.deb
+            echo "📦 Package size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
+          else
+            echo "❌ Download failed"
+            exit 1
           fi
-        fi
-        
-        # Third try: Direct download from known working URLs
-        if [ "$download_success" = false ]; then
-          echo "Trying direct download from download.onlyoffice.com..."
-          # Try different possible URLs
-          urls=(
-            "https://download.onlyoffice.com/install/communityserver/linux/onlyoffice-communityserver_latest_amd64.deb"
-            "https://download.onlyoffice.com/install/workspace/community/linux/onlyoffice-communityserver_latest_amd64.deb"
-            "https://github.com/btactic-oo/OOo-deb-pkgs/releases/latest/download/onlyoffice-communityserver_latest_amd64.deb"
-          )
-          
-          for url in "${urls[@]}"; do
-            echo "Trying: $url"
-            if wget -O onlyoffice-communityserver.deb "$url" 2>/dev/null; then
-              download_success=true
-              echo "Successfully downloaded from: $url"
-              break
-            fi
-          done
-        fi
-        
-        # Fourth try: Use a minimal .deb as base (we mainly need the structure)
-        if [ "$download_success" = false ]; then
-          echo "Creating minimal .deb structure as fallback..."
-          mkdir -p minimal-package/{DEBIAN,opt/onlyoffice/CommunityServer,var/www/onlyoffice,etc/onlyoffice}
-          
-          cat > minimal-package/DEBIAN/control << EOF
-        Package: onlyoffice-communityserver-base
-        Version: 1.0.0
-        Architecture: amd64
-        Maintainer: Build Script
-        Description: Minimal OnlyOffice structure
-        EOF
-          
-          # Create minimal structure
-          echo "#!/bin/bash" > minimal-package/DEBIAN/postinst
-          chmod +x minimal-package/DEBIAN/postinst
-          
-          dpkg-deb --build minimal-package onlyoffice-communityserver.deb
-          download_success=true
-          echo "Created minimal structure - will rely more on your custom code"
-        fi
-        
-        # Verify download/creation
-        if [ ! -f onlyoffice-communityserver.deb ] || [ ! -s onlyoffice-communityserver.deb ]; then
-          echo "ERROR: Failed to get OnlyOffice package"
+        else
+          echo "❌ Custom download script not found"
           exit 1
         fi
         
-        # Extract for assets
-        echo "Extracting package contents..."
+    - name: Extract official package
+      run: |
+        echo "Extracting official package..."
         dpkg-deb -x onlyoffice-communityserver.deb ./official-package/
+        dpkg-deb -e onlyoffice-communityserver.deb ./official-package/DEBIAN/
         
-        # Show what we extracted
-        echo "Extracted structure:"
-        find ./official-package -type d -maxdepth 3 | head -20
+        echo "Looking for existing mail module assemblies..."
+        find ./official-package -name "ASC.Mail*" -type f || echo "No ASC.Mail files found"
+        find ./official-package -name "ASC.Core*" -type f | head -5 || echo "No ASC.Core files found"
         
-    # Cache .NET dependencies
-    - name: Cache .NET packages
-      uses: actions/cache@v4
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.sln') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-          
-    - name: Restore .NET dependencies
-      run: |
-        dotnet restore --verbosity minimal
-        
-    - name: Build .NET solution
-      run: |
-        dotnet build --configuration Release --no-restore --verbosity minimal
-        
-    - name: Publish .NET application
-      run: |
-        dotnet publish --configuration Release --no-build --output ./publish --verbosity minimal
-        
-    - name: Build frontend assets (if available)
-      run: |
-        # Look for frontend directories with package.json
-        if find . -name "package.json" -not -path "./node_modules/*" | head -1; then
-          echo "Found frontend projects, building assets..."
-          
-          # Find and build each frontend project
-          find . -name "package.json" -not -path "./node_modules/*" | while read package_file; do
-            project_dir=$(dirname "$package_file")
-            echo "Building frontend in: $project_dir"
-            
-            cd "$project_dir"
-            
-            # Install dependencies
-            if [ -f "package-lock.json" ]; then
-              npm ci --silent
-            elif [ -f "yarn.lock" ]; then
-              yarn install --frozen-lockfile --silent
-            else
-              npm install --silent
-            fi
-            
-            # Build if build script exists
-            if npm run build --if-present --silent; then
-              echo "Built successfully in $project_dir"
-            else
-              echo "No build script or build failed in $project_dir"
-            fi
-            
-            cd - > /dev/null
-          done
-        else
-          echo "No frontend assets to build"
-        fi
-        
-    - name: Prepare package structure
-      run: |
-        echo "Creating package structure..."
-        mkdir -p ./package-build/{opt/onlyoffice/CommunityServer,var/www/onlyoffice,etc/onlyoffice,usr/share/onlyoffice}
-        
-        # Copy your compiled binaries (this is your custom code!)
-        echo "Copying custom compiled binaries..."
-        cp -r ./publish/* ./package-build/opt/onlyoffice/CommunityServer/
-        
-        # Copy ALL assets from official package
-        echo "Copying assets from official package..."
-        if [ -d "./official-package/var/www/onlyoffice" ]; then
-          cp -r ./official-package/var/www/onlyoffice/* ./package-build/var/www/onlyoffice/
-        fi
-        
-        if [ -d "./official-package/etc/onlyoffice" ]; then
-          cp -r ./official-package/etc/onlyoffice/* ./package-build/etc/onlyoffice/
-        fi
-        
-        if [ -d "./official-package/usr/share/onlyoffice" ]; then
-          cp -r ./official-package/usr/share/onlyoffice/* ./package-build/usr/share/onlyoffice/
-        fi
-        
-        # Copy database scripts and other initialization files
-        echo "Copying database and initialization scripts..."
-        if [ -d "./official-package/opt/onlyoffice" ]; then
-          find ./official-package/opt/onlyoffice -name "*.sql" -exec cp {} ./package-build/opt/onlyoffice/CommunityServer/ \; 2>/dev/null || true
-          find ./official-package/opt/onlyoffice -type d -name "*migration*" -exec cp -r {} ./package-build/opt/onlyoffice/CommunityServer/ \; 2>/dev/null || true
-          find ./official-package/opt/onlyoffice -name "*.sh" -exec cp {} ./package-build/opt/onlyoffice/CommunityServer/ \; 2>/dev/null || true
-        fi
-        
-        # Copy systemd and init scripts
-        if [ -d "./official-package/etc/systemd" ]; then
-          mkdir -p ./package-build/etc/systemd
-          cp -r ./official-package/etc/systemd/* ./package-build/etc/systemd/
-        fi
-        
-        if [ -d "./official-package/etc/init.d" ]; then
-          mkdir -p ./package-build/etc/init.d
-          cp -r ./official-package/etc/init.d/* ./package-build/etc/init.d/
-        fi
-        
-    - name: Create Debian control files
-      run: |
-        mkdir -p ./package-build/DEBIAN
-        
-        # Main control file
-        cat > ./package-build/DEBIAN/control << EOF
-        Package: onlyoffice-communityserver-custom
-        Version: ${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}
-        Section: web
-        Priority: optional
-        Architecture: amd64
-        Depends: dotnet-runtime-6.0, nginx, mysql-server | postgresql
-        Maintainer: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-        Description: OnlyOffice Community Server (Custom Build)
-         Custom build of OnlyOffice Community Server with enhanced CRM email integration.
-         Built from: ${{ github.server_url }}/${{ github.repository }}
-         Commit: ${{ github.sha }}
-        EOF
-        
-        # Post-installation script
-        cat > ./package-build/DEBIAN/postinst << 'EOF'
-        #!/bin/bash
-        set -e
-        
-        # Create onlyoffice user if it doesn't exist
-        if ! id "onlyoffice" >/dev/null 2>&1; then
-            useradd -r -s /bin/false -d /var/www/onlyoffice onlyoffice
-        fi
-        
-        # Create necessary directories
-        mkdir -p /var/log/onlyoffice /var/www/onlyoffice/Data
-        
-        # Set permissions
-        chown -R onlyoffice:onlyoffice /opt/onlyoffice/ 2>/dev/null || true
-        chown -R onlyoffice:onlyoffice /var/www/onlyoffice/ 2>/dev/null || true
-        chown -R onlyoffice:onlyoffice /var/log/onlyoffice/ 2>/dev/null || true
-        
-        # Enable and start services
-        if command -v systemctl >/dev/null 2>&1; then
-            systemctl daemon-reload || true
-            systemctl enable onlyoffice 2>/dev/null || true
-        fi
-        
-        exit 0
-        EOF
-        
-        chmod +x ./package-build/DEBIAN/postinst
-        
-    - name: Build Debian package
-      run: |
-        echo "Building Debian package..."
-        dpkg-deb --build ./package-build onlyoffice-communityserver-custom.deb
-        
-        # Verify package
-        dpkg-deb --info onlyoffice-communityserver-custom.deb
-        echo "Package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
-        
-    - name: Upload Debian package
+    - name: Upload extracted package
       uses: actions/upload-artifact@v4
       with:
-        name: onlyoffice-custom-deb-${{ github.run_number }}
+        name: extracted-onlyoffice-package
+        path: |
+          onlyoffice-communityserver.deb
+          official-package/
+        retention-days: 1
+
+  build-mail-module:
+    needs: download-and-prepare
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Setup .NET Framework and .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          6.0.x
+          5.0.x
+          
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+      
+    - name: Setup NuGet
+      uses: nuget/setup-nuget@v2
+      
+    - name: Download extracted package
+      uses: actions/download-artifact@v4
+      with:
+        name: extracted-onlyoffice-package
+        
+    - name: Restore NuGet packages for mail module
+      shell: pwsh
+      run: |
+        Write-Host "Restoring NuGet packages for mail module..."
+        Set-Location "module/ASC.Mail/ASC.Mail"
+        
+        # Restore packages
+        if (Test-Path "packages.config") {
+          nuget restore packages.config -PackagesDirectory ../../../packages -Verbosity quiet
+        }
+        
+        # Also restore at solution level if there's a solution file
+        Set-Location "../../.."
+        
+        $sln_files = Get-ChildItem -Name "*.sln" -Recurse | Select-Object -First 1
+        if ($sln_files) {
+          Write-Host "Found solution file: $sln_files"
+          nuget restore $sln_files -Verbosity quiet
+        }
+        
+    - name: Build ASC.Mail module specifically
+      shell: pwsh
+      run: |
+        Write-Host "Building ASC.Mail module with your custom changes..."
+        
+        Set-Location "module/ASC.Mail/ASC.Mail"
+        
+        # Build with MSBuild (native Windows support for .NET Framework)
+        Write-Host "Building with MSBuild..."
+        msbuild ASC.Mail.csproj `
+          /p:Configuration=Release `
+          /p:Platform="Any CPU" `
+          /verbosity:minimal
+        
+        # Check if build succeeded
+        if (Test-Path "bin/Release/ASC.Mail.dll") {
+          Write-Host "✅ Successfully built ASC.Mail.dll with MSBuild"
+          Get-ChildItem bin/Release/ | Select-Object Name, Length
+        } else {
+          Write-Host "❌ Build failed - checking for errors..."
+          Get-ChildItem bin/ -Recurse -ErrorAction SilentlyContinue
+          
+          # Try building with more verbose output to see errors
+          Write-Host "Trying build with detailed output..."
+          msbuild ASC.Mail.csproj `
+            /p:Configuration=Release `
+            /p:Platform="Any CPU" `
+            /verbosity:detailed
+        }
+        
+        Set-Location "../../.."
+        
+    - name: Upload built mail module
+      uses: actions/upload-artifact@v4
+      with:
+        name: built-mail-module
+        path: |
+          module/ASC.Mail/ASC.Mail/bin/Release/
+          module/ASC.Mail/ASC.Mail/obj/
+        retention-days: 1
+
+  create-custom-package:
+    needs: [download-and-prepare, build-mail-module]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        
+    - name: Download extracted package
+      uses: actions/download-artifact@v4
+      with:
+        name: extracted-onlyoffice-package
+        
+    - name: Download built mail module
+      uses: actions/download-artifact@v4
+      with:
+        name: built-mail-module
+        path: module/ASC.Mail/ASC.Mail/
+        
+    - name: Create custom package with your changes
+      run: |
+        echo "Creating custom package with your mail module changes..."
+        
+        # Start with the extracted official package
+        mkdir -p custom-package
+        cp -r official-package/* custom-package/
+        
+        # Method 1: Replace compiled DLL if we have it
+        if [ -f "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" ]; then
+          echo "Replacing ASC.Mail.dll with custom build..."
+          
+          # Find where ASC.Mail.dll is located in the official package
+          mail_dll_location=$(find ./custom-package -name "ASC.Mail.dll" -type f | head -1)
+          
+          if [ -n "$mail_dll_location" ]; then
+            echo "Found existing ASC.Mail.dll at: $mail_dll_location"
+            cp module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll "$mail_dll_location"
+            echo "✅ Replaced ASC.Mail.dll with custom version"
+            
+            # Also copy any related assemblies
+            cp module/ASC.Mail/ASC.Mail/bin/Release/*.dll ./custom-package/$(dirname "$mail_dll_location")/ 2>/dev/null || echo "No additional DLLs to copy"
+          else
+            echo "⚠️ Could not find existing ASC.Mail.dll location, copying to standard location"
+            mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/
+            cp module/ASC.Mail/ASC.Mail/bin/Release/*.dll ./custom-package/opt/onlyoffice/CommunityServer/ 2>/dev/null || echo "No DLLs found to copy"
+          fi
+        else
+          echo "⚠️ No compiled ASC.Mail.dll found from Windows build"
+        fi
+        
+        # Method 2: Always include source files for reference
+        echo "Copying modified source files..."
+        mkdir -p ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
+        
+        # Copy your modified files
+        cp module/ASC.Mail/ASC.Mail/Utils/MailAddressHelper.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy MailAddressHelper.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/DaoFactory.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy DaoFactory.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Engine/CrmLinkEngine.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy CrmLinkEngine.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Engine/MessageEngine.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy MessageEngine.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Dao/CrmContactDao.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy CrmContactDao.cs"
+        cp module/ASC.Mail/ASC.Mail/Core/Dao/Interfaces/ICrmContactDao.cs ./custom-package/opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/ 2>/dev/null || echo "Could not copy ICrmContactDao.cs"
+        
+        # Create documentation
+        cat > ./custom-package/opt/onlyoffice/CommunityServer/CUSTOM_MAIL_CHANGES.md << 'EOF'
+        # Custom OnlyOffice Mail Module Changes
+        
+        ## Repository
+        ${{ github.repository }}
+        
+        ## Commit
+        ${{ github.sha }}
+        
+        ## Build Date
+        $(date)
+        
+        ## Modified Files
+        - module/ASC.Mail/ASC.Mail/Utils/MailAddressHelper.cs
+        - module/ASC.Mail/ASC.Mail/Core/DaoFactory.cs  
+        - module/ASC.Mail/ASC.Mail/Core/Engine/CrmLinkEngine.cs
+        - module/ASC.Mail/ASC.Mail/Core/Engine/MessageEngine.cs
+        - module/ASC.Mail/ASC.Mail/Core/Dao/CrmContactDao.cs
+        - module/ASC.Mail/ASC.Mail/Core/Dao/Interfaces/ICrmContactDao.cs
+        
+        ## Changes
+        Enhanced CRM integration for automatic email-to-contact linking.
+        All incoming and outgoing emails are automatically added to CRM if contacts
+        are found in the address book.
+        
+        ## Custom Source Files Location
+        /opt/onlyoffice/CommunityServer/custom-sources/ASC.Mail/
+        EOF
+        
+        echo "✅ Custom package prepared with mail module changes"
+        
+    - name: Build custom Debian package
+      run: |
+        echo "Building custom Debian package..."
+        
+        # Update package metadata
+        if [ -f "./custom-package/DEBIAN/control" ]; then
+          sed -i 's/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/' ./custom-package/DEBIAN/control
+          sed -i "s/Version: .*/Version: ${{ env.ONLYOFFICE_VERSION }}-custom-mail-${{ github.run_number }}/" ./custom-package/DEBIAN/control
+          sed -i '/^Description:/a \ Custom build with enhanced CRM email integration.' ./custom-package/DEBIAN/control
+        fi
+        
+        # Build the custom package
+        dpkg-deb --build ./custom-package onlyoffice-communityserver-custom.deb
+        
+        echo "✅ Custom package built successfully"
+        dpkg-deb --info onlyoffice-communityserver-custom.deb
+        echo "📦 Custom package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
+        
+    - name: Upload custom package
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-custom-mail-${{ github.run_number }}
         path: onlyoffice-communityserver-custom.deb
         retention-days: 30
-        
-  docker:
-    needs: build
+
+  build-docker:
+    needs: create-custom-package
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout
       uses: actions/checkout@v4
     
-    - name: Download Debian package
+    - name: Download custom package
       uses: actions/download-artifact@v4
       with:
-        name: onlyoffice-custom-deb-${{ github.run_number }}
+        name: onlyoffice-custom-mail-${{ github.run_number }}
         
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       
-    - name: Log in to Docker Hub (optional)
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-        
-    - name: Create Dockerfile
+    - name: Build Docker image
       run: |
         cat > Dockerfile << 'EOF'
         FROM ubuntu:20.04
         
-        # Prevent interactive prompts
         ENV DEBIAN_FRONTEND=noninteractive
         
         # Install dependencies
         RUN apt-get update && \
             apt-get install -y \
-            wget \
-            curl \
-            apt-transport-https \
-            ca-certificates \
-            gnupg \
-            lsb-release \
-            supervisor \
-            nginx \
-            mysql-client \
-            postgresql-client \
-            && rm -rf /var/lib/apt/lists/*
+            wget curl apt-transport-https ca-certificates gnupg lsb-release \
+            supervisor nginx mysql-client postgresql-client && \
+            rm -rf /var/lib/apt/lists/*
             
         # Install .NET runtime
         RUN wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb && \
@@ -357,42 +309,32 @@ jobs:
             apt-get install -y dotnet-runtime-6.0 && \
             rm packages-microsoft-prod.deb && \
             rm -rf /var/lib/apt/lists/*
-            
-        # Copy and install custom package
+        
+        # Install custom OnlyOffice package
         COPY onlyoffice-communityserver-custom.deb /tmp/
         RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
             rm /tmp/onlyoffice-communityserver-custom.deb
         
-        # Expose ports
+        # Add labels for identification
+        LABEL org.opencontainers.image.title="OnlyOffice Community Server - Custom Mail Integration"
+        LABEL org.opencontainers.image.description="OnlyOffice with enhanced CRM email integration"
+        LABEL org.opencontainers.image.source="${{ github.server_url }}/${{ github.repository }}"
+        LABEL org.opencontainers.image.revision="${{ github.sha }}"
+        
         EXPOSE 80 443 5222 9865 9888
         
-        # Health check
         HEALTHCHECK --interval=30s --timeout=10s --start-period=120s \
-          CMD curl -f http://localhost/health || curl -f http://localhost/ || exit 1
+          CMD curl -f http://localhost/ || exit 1
           
-        # Use supervisor to manage services
         CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
         EOF
         
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: |
-          ${{ secrets.DOCKER_USERNAME }}/onlyoffice-custom:latest
-          ${{ secrets.DOCKER_USERNAME }}/onlyoffice-custom:${{ github.run_number }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        
-    - name: Save Docker image (for manual use)
-      run: |
-        docker build -t onlyoffice-custom:latest .
-        docker save onlyoffice-custom:latest | gzip > onlyoffice-custom-image.tar.gz
+        docker build -t onlyoffice-custom-mail:latest .
+        docker save onlyoffice-custom-mail:latest | gzip > onlyoffice-custom-mail-image.tar.gz
         
     - name: Upload Docker image
       uses: actions/upload-artifact@v4
       with:
-        name: onlyoffice-custom-image-${{ github.run_number }}
-        path: onlyoffice-custom-image.tar.gz
+        name: onlyoffice-custom-mail-image-${{ github.run_number }}
+        path: onlyoffice-custom-mail-image.tar.gz
         retention-days: 7
