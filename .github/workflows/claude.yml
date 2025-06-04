@@ -94,11 +94,6 @@ jobs:
         
         echo "Proceeding with configured version: ${{ env.ONLYOFFICE_VERSION }}"
         
-    - name: Smart download with multiple sources
-      if: steps.cache-deb.outputs.cache-hit != 'true'
-      run: |
-        echo "⬇️ Downloading OnlyOffice package..."
-        
     - name: Smart download with repository method
       if: steps.cache-deb.outputs.cache-hit != 'true'
       run: |
@@ -131,37 +126,8 @@ jobs:
           fi
         fi
         
-        # Method 2: Use the official installation script to get package info
+        # Method 2: Try alternative repository URLs
         if [ "$download_success" = false ]; then
-          echo "🔄 Trying installation script method..."
-          
-          # Download the workspace installation script
-          wget -q https://download.onlyoffice.com/install/workspace-install.sh -O /tmp/workspace-install.sh
-          chmod +x /tmp/workspace-install.sh
-          
-          # Extract the package URL from the script (if possible)
-          if grep -o 'https://[^"]*onlyoffice-communityserver[^"]*\.deb' /tmp/workspace-install.sh > /tmp/package_urls.txt; then
-            while IFS= read -r url; do
-              echo "🔄 Trying direct download: $url"
-              if wget --timeout=60 --tries=2 "$url" -O onlyoffice-communityserver.deb 2>/dev/null; then
-                if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
-                  file_size=$(stat -c%s onlyoffice-communityserver.deb)
-                  if [ "$file_size" -gt 50000000 ]; then
-                    echo "✅ Downloaded via script URL: $url"
-                    download_success=true
-                    break
-                  fi
-                fi
-              fi
-            done < /tmp/package_urls.txt
-          fi
-        fi
-        
-        # Method 3: Try alternative repository URLs
-        if [ "$download_success" = false ]; then
-          echo "🔄 Trying alternative repositories..."
-          
-          # Try the community repository
           echo "🔄 Trying alternative repositories..."
           echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
           sudo apt-get update -qq
@@ -178,101 +144,9 @@ jobs:
           fi
         fi
         
-        # Method 4: Try building from Docker (as fallback)
-        if [ "$download_success" = false ]; then
-          echo "🔄 Trying Docker extraction method..."
-          
-          # Install Docker if needed
-          if ! command -v docker >/dev/null 2>&1; then
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sudo sh get-docker.sh
-          fi
-          
-          # Pull OnlyOffice Community Server Docker image and extract package
-          if sudo docker pull onlyoffice/communityserver:latest; then
-            # Create container and copy package files
-            container_id=$(sudo docker create onlyoffice/communityserver:latest)
-            
-            # Try to find and extract the DEB package from the container
-            if sudo docker cp "$container_id":/app/onlyoffice/ /tmp/onlyoffice_extracted 2>/dev/null; then
-              # Look for DEB files or create a pseudo-package
-              echo "📦 Creating package from Docker container..."
-              mkdir -p /tmp/docker_package/DEBIAN
-              
-              # Copy the application files
-              sudo cp -r /tmp/onlyoffice_extracted /tmp/docker_package/opt/onlyoffice/
-              
-              # Create a basic control file
-              cat > /tmp/docker_package/DEBIAN/control << EOF
-        Package: onlyoffice-communityserver-custom
-        Version: docker-extracted-$(date +%Y%m%d)
-        Architecture: all
-        Maintainer: Custom Build
-        Description: OnlyOffice Community Server extracted from Docker
-        EOF
-              
-              # Create the package
-              sudo chown -R root:root /tmp/docker_package/
-              if dpkg-deb --build /tmp/docker_package onlyoffice-communityserver.deb; then
-                echo "✅ Created package from Docker container"
-                download_success=true
-              fi
-            fi
-            
-            sudo docker rm "$container_id" 2>/dev/null || true
-          fi
-        fi
-        
-        if [ "$download_success" = false ]; then
-          echo "❌ All download methods failed!"
-          echo "💡 OnlyOffice Community Server may need to be installed via the official script"
-          echo "💡 Consider using the Docker installation method instead"
-          exit 1
-        fi
-        
-        # Final validation and info
-        echo "📦 Final package info:"
-        ls -lh onlyoffice-communityserver.deb
-        dpkg-deb --info onlyoffice-communityserver.deb | head -10
-        
-        # If direct downloads fail, try using the custom build script if available
-        if [ "$download_success" = false ] && [ -f ".github/build-scripts/download-deb.sh" ]; then
-          echo "🔄 Trying custom download script..."
-          chmod +x .github/build-scripts/download-deb.sh
-          if sudo ./.github/build-scripts/download-deb.sh; then
-            if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
-              echo "✅ Custom script download successful!"
-              download_success=true
-            fi
-          fi
-        fi
-        
-        # Final fallback - try APT repository method
-        if [ "$download_success" = false ]; then
-          echo "🔄 Trying APT repository method..."
-          
-          # Add OnlyOffice repository
-          wget -qO - https://download.onlyoffice.com/repo/4.0/debian/onlyoffice.key | sudo apt-key add -
-          echo "deb https://download.onlyoffice.com/repo/4.0/debian stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
-          
-          sudo apt-get update -qq
-          
-          # Download package without installing
-          if apt-get download onlyoffice-communityserver 2>/dev/null; then
-            # Find the downloaded package
-            deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-            if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              mv "$deb_file" onlyoffice-communityserver.deb
-              echo "✅ APT download successful!"
-              download_success=true
-            fi
-          fi
-        fi
-        
         if [ "$download_success" = false ]; then
           echo "❌ All download methods failed!"
           echo "💡 Please check if OnlyOffice ${{ env.ONLYOFFICE_VERSION }} is available"
-          echo "💡 You may need to update ONLYOFFICE_VERSION or provide a custom download script"
           exit 1
         fi
         
@@ -301,8 +175,7 @@ jobs:
           exit 1
         fi
 
-
-build-mail-module:
+  build-mail-module:
     needs: prepare-environment
     runs-on: windows-latest
     if: (needs.prepare-environment.outputs.skip-build != 'true' || github.event.inputs.force_rebuild == 'true') && needs.prepare-environment.result == 'success'
@@ -732,9 +605,9 @@ build-mail-module:
         path: |
           ${{ steps.verify-build.outputs.main_dll_dir }}/**/*Mail*
         retention-days: 1
-        
+
   # Streamlined package creation
-create-custom-package:
+  create-custom-package:
     needs: [prepare-environment, build-mail-module]
     runs-on: ubuntu-latest
     if: always() && (needs.prepare-environment.result == 'success' || needs.prepare-environment.result == 'skipped')
