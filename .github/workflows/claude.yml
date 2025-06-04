@@ -13,14 +13,12 @@ on:
         default: false
 
 env:
-  ONLYOFFICE_VERSION: "12.7.1"  # Latest available version as of June 2025
+  ONLYOFFICE_VERSION: "12.7.1"
   FORCE_REBUILD: ${{ github.event.inputs.force_rebuild || 'false' }}
   SKIP_DOCKER: ${{ github.event.inputs.skip_docker || 'false' }}
-  # Alternative versions to try if main version fails
   FALLBACK_VERSIONS: "12.7.0,12.6.0,12.5.2,12.1.0,12.0.1"
 
 jobs:
-  # Fast preparation job with aggressive caching
   prepare-environment:
     runs-on: ubuntu-latest
     outputs:
@@ -32,13 +30,12 @@ jobs:
     - name: Checkout code (shallow)
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1  # Shallow clone for speed
-        submodules: false  # Skip submodules initially
+        fetch-depth: 1
+        submodules: false
         
     - name: Check for relevant changes
       id: check-changes
       run: |
-        # Only check mail module files for changes
         CHANGED_FILES=$(git diff --name-only HEAD~1 2>/dev/null || echo "all")
         
         if [[ "$CHANGED_FILES" == "all" ]] || echo "$CHANGED_FILES" | grep -E "(module/ASC\.Mail|\.github/workflows)" > /dev/null; then
@@ -72,7 +69,6 @@ jobs:
     - name: Install dependencies (parallel)
       if: steps.cache-deb.outputs.cache-hit != 'true' || steps.cache-extracted.outputs.cache-hit != 'true'
       run: |
-        # Install in parallel and only what's needed
         sudo apt-get update -qq &
         wait
         sudo apt-get install -y --no-install-recommends wget curl dpkg-dev &
@@ -83,12 +79,10 @@ jobs:
       run: |
         echo "🔍 Checking available OnlyOffice versions..."
         
-        # Check GitHub releases
         echo "GitHub releases:"
         curl -s "https://api.github.com/repos/ONLYOFFICE/CommunityServer/releases" | \
           jq -r '.[].tag_name' | head -5 || echo "GitHub API check failed"
         
-        # Check what's available in download directory
         echo "Checking download.onlyoffice.com..."
         curl -s -I "https://download.onlyoffice.com/install/community/" || echo "Download site check failed"
         
@@ -99,25 +93,20 @@ jobs:
       run: |
         echo "⬇️ Setting up OnlyOffice repository and downloading package..."
         
-        # Add OnlyOffice APT repository
         echo "🔧 Adding OnlyOffice repository..."
         wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
         echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
         
-        # Update package lists
         sudo apt-get update -qq
         
-        # Try to download the package without installing dependencies
         echo "📦 Downloading OnlyOffice Community Server package..."
         
         download_success=false
         
-        # Method 1: Download using apt-get download
         echo "📦 Downloading OnlyOffice Community Server package..."
         if apt-get download onlyoffice-communityserver 2>/dev/null; then
           deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
           if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-            # Rename to standard name if needed
             if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
               mv "$deb_file" onlyoffice-communityserver.deb
             fi
@@ -126,7 +115,6 @@ jobs:
           fi
         fi
         
-        # Method 2: Try alternative repository URLs
         if [ "$download_success" = false ]; then
           echo "🔄 Trying alternative repositories..."
           echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
@@ -150,7 +138,6 @@ jobs:
           exit 1
         fi
         
-        # Final validation and info
         echo "📦 Final package info:"
         ls -lh onlyoffice-communityserver.deb
         dpkg-deb --info onlyoffice-communityserver.deb | head -10
@@ -160,13 +147,11 @@ jobs:
       run: |
         echo "📦 Extracting package..."
         
-        # Parallel extraction
         mkdir -p official-package
         dpkg-deb -x onlyoffice-communityserver.deb official-package/ &
         dpkg-deb -e onlyoffice-communityserver.deb official-package/DEBIAN/ &
         wait
         
-        # Quick validation
         extracted_files=$(find official-package -type f | wc -l)
         if [ "$extracted_files" -gt 100 ]; then
           echo "✅ Extracted $extracted_files files"
@@ -212,7 +197,6 @@ jobs:
       run: |
         Write-Host "🔧 Fixing common OnlyOffice project issues..."
         
-        # Function to fix a project file
         function Fix-ProjectFile {
           param($projectPath)
           
@@ -225,11 +209,9 @@ jobs:
           $content = Get-Content $projectPath -Raw
           $modified = $false
           
-          # Check if it's an SDK-style project
           if ($content -match '<Project\s+Sdk=') {
             Write-Host "  SDK-style project detected"
             
-            # Fix RuntimeIdentifiers if missing
             if ($content -notmatch '<RuntimeIdentifiers>') {
               if ($content -match '(<PropertyGroup[^>]*>)') {
                 $replacement = "`$1`n    <RuntimeIdentifiers>win-x64;win-x86;win;any</RuntimeIdentifiers>"
@@ -239,7 +221,6 @@ jobs:
               }
             }
             
-            # Fix OutputPath if missing
             if ($content -notmatch '<OutputPath>' -and $content -notmatch '<BaseOutputPath>') {
               if ($content -match '(<PropertyGroup[^>]*>)') {
                 $replacement = "`$1`n    <OutputPath>bin\`$(Configuration)\</OutputPath>`n    <BaseOutputPath>bin\</BaseOutputPath>"
@@ -249,7 +230,6 @@ jobs:
               }
             }
             
-            # Add Platform configuration if missing
             if ($content -notmatch '<Platforms>' -and $content -notmatch '<Platform>') {
               if ($content -match '(<PropertyGroup[^>]*>)') {
                 $replacement = "`$1`n    <Platforms>AnyCPU;x64;x86</Platforms>`n    <Platform Condition=`"'`$(Platform)' == ''`">AnyCPU</Platform>"
@@ -262,7 +242,6 @@ jobs:
           } else {
             Write-Host "  Legacy project format"
             
-            # For legacy projects, ensure proper platform configuration
             if ($content -notmatch 'AnyCPU\|Release' -and $content -match '<PropertyGroup.*Release.*>') {
               $content = $content -replace '(<PropertyGroup[^>]*Condition[^>]*Release[^>]*>)', '$1`n    <OutputPath>bin\Release\</OutputPath>`n    <Platform>AnyCPU</Platform>'
               Write-Host "  ✅ Added legacy project OutputPath"
@@ -278,7 +257,6 @@ jobs:
           }
         }
         
-        # List of problematic projects based on the error log
         $problemProjects = @(
           "common/ASC.Common/ASC.Common.csproj",
           "module/ASC.Mail.Server/ASC.Mail.Server/ASC.Mail.Server.csproj",
@@ -295,7 +273,6 @@ jobs:
         
         Write-Host "🔍 Searching for additional projects that might need fixing..."
         
-        # Find and fix other .csproj files that might have similar issues
         $allProjects = Get-ChildItem -Path "." -Filter "*.csproj" -Recurse | Where-Object { $_.FullName -notlike "*\obj\*" -and $_.FullName -notlike "*\bin\*" }
         
         foreach ($project in $allProjects) {
@@ -321,644 +298,18 @@ jobs:
           
           Write-Host "Solution file found, size: $($content.Length) characters"
           
-          # Look for the configuration section more broadly
           $configFound = $false
           $validConfigs = @()
           
-          # Method 1: Look for SolutionConfigurationPlatforms
           if ($content -match 'GlobalSection\(SolutionConfigurationPlatforms\)\s*=\s*preSolution(.*?)EndGlobalSection') {
             $configSection = $matches[1]
             Write-Host "Found SolutionConfigurationPlatforms section"
             $configFound = $true
             
-            # Parse configurations
             $lines = $configSection -split "`r?`n"
             foreach ($line in $lines) {
               $trimmedLine = $line.Trim()
-              if ($trimmedLine -match '^([^=]+)\s*=\s*([^=]+)
-        
-    - name: NuGet restore with fixed projects
-      shell: pwsh
-      run: |
-        Write-Host "📦 NuGet restore after fixing RuntimeIdentifiers..."
-        
-        if (Test-Path "Studio.sln") {
-          # First, try standard NuGet restore
-          Write-Host "Running nuget restore..."
-          nuget restore Studio.sln -Verbosity normal -NonInteractive
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Standard NuGet restore failed, trying dotnet restore..."
-            dotnet restore Studio.sln --verbosity normal
-          }
-        }
-        
-    - name: Try building with discovered configurations (improved)
-      shell: pwsh
-      run: |
-        Write-Host "🏗️ Building with discovered configurations..."
-        
-        $buildSuccess = $false
-        
-        # Use priority configurations if available, otherwise fall back to standard ones
-        $configFile = if (Test-Path "priority_configs.txt") { "priority_configs.txt" } else { "valid_configs.txt" }
-        
-        if ((Test-Path "Studio.sln") -and (Test-Path $configFile)) {
-          $validConfigs = Get-Content $configFile
-          
-          Write-Host "Trying configurations in priority order:"
-          foreach ($config in $validConfigs) {
-            Write-Host "🔨 Attempting: '$config'"
-            
-            if ($config -match '^([^|]+)\|(.+)
-        
-    - name: Build just the mail module (if solution failed)
-      if: env.SOLUTION_BUILD_SUCCESS != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "🎯 Building only the mail module..."
-        
-        # Build critical dependencies first
-        $criticalDeps = @(
-          "common/ASC.Common/ASC.Common.csproj",
-          "common/ASC.Core.Common/ASC.Core.Common.csproj"
-        )
-        
-        Write-Host "Building critical dependencies first..."
-        foreach ($dep in $criticalDeps) {
-          if (Test-Path $dep) {
-            Write-Host "Building dependency: $dep"
-            
-            # Try multiple approaches for each dependency
-            $depBuilt = $false
-            
-            # Approach 1: dotnet build
-            try {
-              Write-Host "  Trying dotnet build..."
-              dotnet build $dep --configuration Release --verbosity normal
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "  ✅ dotnet build succeeded"
-                $depBuilt = $true
-              }
-            } catch {
-              Write-Host "  ❌ dotnet build failed"
-            }
-            
-            # Approach 2: MSBuild if dotnet failed
-            if (-not $depBuilt) {
-              try {
-                Write-Host "  Trying MSBuild..."
-                msbuild $dep /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "  ✅ MSBuild succeeded"
-                  $depBuilt = $true
-                }
-              } catch {
-                Write-Host "  ❌ MSBuild failed"
-              }
-            }
-            
-            if (-not $depBuilt) {
-              Write-Host "  ⚠️ Could not build $dep"
-            }
-          }
-        }
-        
-        # Now try to build the mail module
-        $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        if (Test-Path $mailProject) {
-          Write-Host "`nBuilding mail module: $mailProject"
-          
-          $mailBuilt = $false
-          
-          # Try dotnet build first
-          try {
-            Write-Host "Trying dotnet build for mail module..."
-            dotnet build $mailProject --configuration Release --verbosity normal
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Mail module built with dotnet build"
-              $mailBuilt = $true
-              echo "MAIL_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-            }
-          } catch {
-            Write-Host "dotnet build failed for mail module"
-          }
-          
-          # Try MSBuild if dotnet failed
-          if (-not $mailBuilt) {
-            try {
-              Write-Host "Trying MSBuild for mail module..."
-              msbuild $mailProject /p:Configuration=Release /p:Platform="Any CPU" /verbosity:normal
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Mail module built with MSBuild"
-                $mailBuilt = $true
-                echo "MAIL_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-              }
-            } catch {
-              Write-Host "MSBuild also failed for mail module"
-            }
-          }
-          
-          if (-not $mailBuilt) {
-            Write-Host "❌ Could not build mail module with any method"
-            echo "MAIL_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-          }
-        } else {
-          Write-Host "❌ Mail project not found at: $mailProject"
-          echo "MAIL_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-        }
-        
-    - name: Comprehensive assembly search
-      id: verify-build
-      shell: pwsh
-      run: |
-        Write-Host "🔍 Comprehensive search for built assemblies..."
-        $success = $false
-        $foundDlls = @()
-        
-        # Search for ASC.Mail.dll specifically
-        Write-Host "Searching for ASC.Mail.dll files..."
-        try {
-          $mailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
-          
-          foreach ($dll in $mailDlls) {
-            $size = $dll.Length
-            $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-            
-            Write-Host "Found ASC.Mail.dll:"
-            Write-Host "  📍 Path: $relativePath"
-            Write-Host "  📏 Size: $size bytes"
-            Write-Host "  📅 Modified: $($dll.LastWriteTime)"
-            
-            # Check if it's a real assembly
-            if ($size -gt 10000) {
-              try {
-                $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName)
-                Write-Host "  📋 Version: $($fileInfo.FileVersion)"
-                Write-Host "  ✅ Valid assembly"
-                
-                $foundDlls += @{
-                  Path = $relativePath
-                  Size = $size
-                  FullPath = $dll.FullName
-                }
-                $success = $true
-              } catch {
-                if ($size -gt 50000) {
-                  Write-Host "  ✅ Large file, likely valid (version check failed)"
-                  $foundDlls += @{
-                    Path = $relativePath
-                    Size = $size
-                    FullPath = $dll.FullName
-                  }
-                  $success = $true
-                } else {
-                  Write-Host "  ⚠️ Cannot verify and size suspicious"
-                }
-              }
-            } else {
-              Write-Host "  ❌ Too small - likely stub file"
-            }
-          }
-        } catch {
-          Write-Host "Error searching for ASC.Mail.dll: $($_.Exception.Message)"
-        }
-        
-        # Also search for any mail-related assemblies
-        Write-Host "`nSearching for other mail-related assemblies..."
-        try {
-          $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Length -gt 1000 -and $_.Name -ne "ASC.Mail.dll" } | 
-            Sort-Object Length -Descending
-          
-          if ($otherMailDlls) {
-            Write-Host "Other mail-related DLLs:"
-            foreach ($dll in $otherMailDlls) {
-              $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-              Write-Host "  📄 $relativePath ($($dll.Length) bytes)"
-            }
-          } else {
-            Write-Host "No other mail-related DLLs found"
-          }
-        } catch {
-          Write-Host "Error searching for other mail DLLs: $($_.Exception.Message)"
-        }
-        
-        # Show what actually got built (top 20 largest DLLs)
-        Write-Host "`nLargest DLLs in bin directories:"
-        try {
-          $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
-            Where-Object { $_.DirectoryName -like "*bin*" } | 
-            Sort-Object Length -Descending | 
-            Select-Object -First 20
-            
-          if ($binDlls) {
-            foreach ($dll in $binDlls) {
-              $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-              $sizeKB = [math]::Round($dll.Length / 1024, 1)
-              Write-Host "  📄 $relativePath ($sizeKB KB)"
-            }
-          } else {
-            Write-Host "No DLLs found in bin directories"
-          }
-        } catch {
-          Write-Host "Error listing bin DLLs: $($_.Exception.Message)"
-        }
-        
-        # Report which build method worked
-        if ($env:SOLUTION_BUILD_SUCCESS -eq "true") {
-          Write-Host "`n🎯 Solution build was successful ($env:BUILD_CONFIG|$env:BUILD_PLATFORM)"
-        } elseif ($env:MAIL_BUILD_SUCCESS -eq "true") {
-          Write-Host "`n🎯 Individual mail module build was successful"
-        } else {
-          Write-Host "`n⚠️ No successful builds detected"
-        }
-        
-        # Final verification
-        if ($success -and $foundDlls.Count -gt 0) {
-          # Sort by size and pick the largest valid DLL
-          $sortedDlls = $foundDlls | Sort-Object Size -Descending
-          $primaryDll = $sortedDlls[0]
-          
-          Write-Host "`n✅ BUILD VERIFICATION SUCCESSFUL!"
-          Write-Host "Primary ASC.Mail.dll: $($primaryDll.Path)"
-          Write-Host "Size: $($primaryDll.Size) bytes"
-          
-          echo "success=true" >> $env:GITHUB_OUTPUT
-          echo "main_dll_path=$($primaryDll.Path)" >> $env:GITHUB_OUTPUT
-          echo "main_dll_dir=$(Split-Path $($primaryDll.Path) -Parent)" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Host "`n❌ NO VALID ASC.MAIL.DLL FOUND"
-          Write-Host "Build appears to have failed completely"
-          echo "success=false" >> $env:GITHUB_OUTPUT
-        }
-        
-    - name: Upload build artifacts (always for debugging)
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-debug-${{ github.run_number }}
-        path: |
-          **/bin/**/*.dll
-          **/*Mail*.dll
-          **/*Mail*.pdb
-          valid_configs.txt
-          common/ASC.Common/ASC.Common.csproj
-        retention-days: 2
-        
-    - name: Upload successful mail module build
-      if: steps.verify-build.outputs.success == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: mail-module-build
-        path: |
-          ${{ steps.verify-build.outputs.main_dll_dir }}/**/*Mail*
-        retention-days: 1
-
-  # Streamlined package creation
-  create-custom-package:
-    needs: [prepare-environment, build-mail-module]
-    runs-on: ubuntu-latest
-    if: always() && (needs.prepare-environment.result == 'success' || needs.prepare-environment.result == 'skipped')
-    
-    steps:
-    - name: Checkout code (for fallback)
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-        
-    - name: Check job dependencies
-      run: |
-        echo "=== JOB DEPENDENCY STATUS ==="
-        echo "prepare-environment result: ${{ needs.prepare-environment.result }}"
-        echo "build-mail-module result: ${{ needs.build-mail-module.result }}"
-        echo "prepare-environment outputs:"
-        echo "  cache-hit-deb: ${{ needs.prepare-environment.outputs.cache-hit-deb }}"
-        echo "  cache-hit-extracted: ${{ needs.prepare-environment.outputs.cache-hit-extracted }}"
-        echo "  skip-build: ${{ needs.prepare-environment.outputs.skip-build }}"
-        
-    - name: Try to restore cached package
-      id: restore-cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          onlyoffice-communityserver.deb
-          official-package/
-        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') }}
-        restore-keys: |
-          onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-
-          onlyoffice-extracted-v2-
-          
-    - name: Download artifacts from preparation job (fallback)
-      if: steps.restore-cache.outputs.cache-hit != 'true'
-      uses: actions/download-artifact@v4
-      continue-on-error: true
-      with:
-        name: extracted-onlyoffice-package
-        
-    - name: Verify package availability
-      run: |
-        echo "🔍 Checking package availability..."
-        
-        if [ -d "official-package" ] && [ -f "onlyoffice-communityserver.deb" ]; then
-          echo "✅ Package available from cache/artifacts"
-          echo "📦 DEB size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
-          echo "📁 Extracted files: $(find official-package -type f | wc -l)"
-        else
-          echo "❌ Package not available, need to download and extract"
-          
-          # Emergency download if nothing is available
-          echo "🚨 Emergency package download..."
-          
-          # Install dependencies
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wget dpkg-dev apt-transport-https ca-certificates
-          
-          # Add OnlyOffice APT repository
-          echo "🔧 Adding OnlyOffice repository..."
-          wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
-          echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
-          
-          # Update package lists
-          sudo apt-get update -qq
-          
-          download_success=false
-          
-          # Try to download the package using apt-get download
-          echo "📦 Downloading OnlyOffice Community Server..."
-          
-          # Download to current directory instead of /tmp
-          if apt-get download onlyoffice-communityserver 2>/dev/null; then
-            deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-            if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              # Rename to standard name if needed
-              if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
-                mv "$deb_file" onlyoffice-communityserver.deb
-              fi
-              echo "✅ Emergency download successful!"
-              download_success=true
-            fi
-          fi
-          
-          # Fallback: Try alternative repository
-          if [ "$download_success" = false ]; then
-            echo "🔄 Trying alternative repository..."
-            echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
-            sudo apt-get update -qq
-            
-            if apt-get download onlyoffice-communityserver 2>/dev/null; then
-              deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-              if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-                if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
-                  mv "$deb_file" onlyoffice-communityserver.deb
-                fi
-                echo "✅ Alternative repository download successful!"
-                download_success=true
-              fi
-            fi
-          fi
-          
-          if [ "$download_success" = false ]; then
-            echo "❌ Emergency download failed"
-            exit 1
-          fi
-          
-          # Extract the package
-          echo "📦 Emergency extraction..."
-          mkdir -p official-package
-          dpkg-deb -x onlyoffice-communityserver.deb official-package/
-          dpkg-deb -e onlyoffice-communityserver.deb official-package/DEBIAN/
-          
-          echo "✅ Emergency package preparation complete"
-        fi
-        
-    - name: Download build artifacts (conditional)
-      if: needs.build-mail-module.outputs.build-success == 'true'
-      uses: actions/download-artifact@v4
-      continue-on-error: true
-      with:
-        name: mail-module-build
-        path: build-output/
-        
-    - name: Fast package creation
-      run: |
-        echo "🚀 Fast package creation..."
-        
-        # Verify we have the source package
-        if [ ! -d "official-package" ]; then
-          echo "❌ official-package directory still not found!"
-          echo "Available directories:"
-          ls -la
-          exit 1
-        fi
-        
-        # Quick copy
-        echo "📋 Copying package structure..."
-        cp -r official-package custom-package
-        
-        echo "✅ Package structure copied"
-        echo "📊 Files in custom package: $(find custom-package -type f | wc -l)"
-        
-        # Replace mail module if we have a new one  
-        if [ -d "build-output/" ]; then
-          echo "📋 Searching for built mail assemblies..."
-          
-          # Find any ASC.Mail.dll files in the build output
-          mail_dlls=$(find build-output -name "ASC.Mail.dll" -type f 2>/dev/null || true)
-          
-          if [ -n "$mail_dlls" ]; then
-            echo "✅ Found compiled mail assemblies:"
-            echo "$mail_dlls"
-            
-            # Get the largest DLL file (most likely the main one)
-            main_dll=$(echo "$mail_dlls" | xargs ls -la | sort -k5 -nr | head -1 | awk '{print $NF}')
-            echo "📋 Using primary DLL: $main_dll"
-            
-            # Find all ASC.Mail.dll locations in the package and replace them
-            package_dlls=$(find custom-package -name "ASC.Mail.dll" -type f 2>/dev/null || true)
-            
-            if [ -n "$package_dlls" ]; then
-              echo "🔄 Replacing mail assemblies in package:"
-              while IFS= read -r dll_path; do
-                if [ -f "$dll_path" ]; then
-                  cp "$main_dll" "$dll_path"
-                  echo "  ✅ Updated: $dll_path"
-                fi
-              done <<< "$package_dlls"
-              
-              # Also copy any related files (PDB, XML, etc.)
-              main_dll_dir=$(dirname "$main_dll")
-              for ext in pdb xml exe.config; do
-                if [ -f "${main_dll_dir}/ASC.Mail.$ext" ]; then
-                  while IFS= read -r dll_path; do
-                    base_path="${dll_path%.dll}.$ext"
-                    base_dir=$(dirname "$dll_path")
-                    if [ -f "$base_path" ] || [ -d "$base_dir" ]; then
-                      cp "${main_dll_dir}/ASC.Mail.$ext" "$base_dir/" 2>/dev/null || true
-                      echo "  ✅ Updated: ASC.Mail.$ext in $base_dir"
-                    fi
-                  done <<< "$package_dlls"
-                fi
-              done
-              
-            else
-              echo "⚠️ No ASC.Mail.dll files found in package to replace"
-              # Create a new directory for the compiled assemblies
-              mkdir -p custom-package/opt/onlyoffice/CommunityServer/bin/
-              echo "$mail_dlls" | while read -r dll; do
-                if [ -f "$dll" ]; then
-                  cp "$dll" custom-package/opt/onlyoffice/CommunityServer/bin/
-                  echo "  ✅ Added: $(basename "$dll") to package"
-                fi
-              done
-            fi
-            
-          else
-            echo "ℹ️ No ASC.Mail.dll found in build output, using original mail module"
-            echo "Available files in build-output:"
-            find build-output -name "*.dll" -type f | head -10 || echo "No DLL files found"
-          fi
-        else
-          echo "ℹ️ No build output available, using original mail module"
-        fi
-        
-        # Comprehensive permission fix
-        if [ -d "custom-package/DEBIAN" ]; then
-          echo "🔧 Fixing DEBIAN script permissions..."
-          
-          # Make all maintainer scripts executable (must be >=0555 and <=0775)
-          for script in preinst postinst prerm postrm config templates; do
-            if [ -f "custom-package/DEBIAN/$script" ]; then
-              chmod 755 "custom-package/DEBIAN/$script"
-              echo "✅ Fixed $script: $(ls -la custom-package/DEBIAN/$script | awk '{print $1}')"
-            fi
-          done
-          
-          # Control and conffiles should be readable only
-          chmod 644 custom-package/DEBIAN/control 2>/dev/null || true
-          chmod 644 custom-package/DEBIAN/conffiles 2>/dev/null || true
-          chmod 644 custom-package/DEBIAN/md5sums 2>/dev/null || true
-          
-          echo "📋 Final DEBIAN permissions:"
-          ls -la custom-package/DEBIAN/ | head -5
-        fi
-        
-        # Quick metadata update
-        if [ -f "custom-package/DEBIAN/control" ]; then
-          sed -i "s/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/" custom-package/DEBIAN/control
-          sed -i "s/Version: \(.*\)/Version: \1-custom-${{ github.run_number }}/" custom-package/DEBIAN/control
-        fi
-        
-        # Validate package structure before building
-        echo "🔍 Validating package structure..."
-        
-        if [ ! -d "custom-package" ]; then
-          echo "❌ Custom package directory not found!"
-          exit 1
-        fi
-        
-        if [ ! -d "custom-package/DEBIAN" ]; then
-          echo "❌ DEBIAN directory not found!"
-          exit 1
-        fi
-        
-        if [ ! -f "custom-package/DEBIAN/control" ]; then
-          echo "❌ Control file not found!"
-          exit 1
-        fi
-        
-        echo "✅ Package structure validated"
-        echo "📊 Total files: $(find custom-package -type f | wc -l)"
-        echo "📦 Package size: $(du -sh custom-package | cut -f1)"
-        
-        # Build package with better error handling
-        echo "🔨 Building DEB package..."
-        
-        sudo chown -R root:root custom-package/
-        
-        if dpkg-deb --build custom-package onlyoffice-communityserver-custom.deb 2>&1; then
-          echo "✅ Package built successfully!"
-          
-          # Validate the final package
-          if [ -f "onlyoffice-communityserver-custom.deb" ] && [ -s "onlyoffice-communityserver-custom.deb" ]; then
-            echo "📦 Final package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
-            
-            # Quick package validation
-            echo "🔍 Validating package integrity..."
-            if dpkg-deb --info onlyoffice-communityserver-custom.deb >/dev/null 2>&1; then
-              echo "✅ Package validation passed!"
-            else
-              echo "⚠️ Package validation warnings (may still be usable)"
-            fi
-          else
-            echo "❌ Package file is missing or empty"
-            exit 1
-          fi
-        else
-          echo "❌ Package build failed!"
-          echo "📋 DEBIAN directory final state:"
-          ls -la custom-package/DEBIAN/
-          exit 1
-        fi
-        
-    - name: Upload custom package
-      uses: actions/upload-artifact@v4
-      with:
-        name: onlyoffice-custom-${{ github.run_number }}
-        path: onlyoffice-communityserver-custom.deb
-        retention-days: 7  # Reduced retention
-
-  # Optional Docker build
-  build-docker:
-    needs: create-custom-package
-    runs-on: ubuntu-latest
-    if: needs.create-custom-package.result == 'success' && github.event.inputs.skip_docker != 'true'
-    
-    steps:
-    - name: Download custom package
-      uses: actions/download-artifact@v4
-      with:
-        name: onlyoffice-custom-${{ github.run_number }}
-        
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Fast Docker build
-      run: |
-        # Streamlined Dockerfile
-        cat > Dockerfile << 'EOF'
-        FROM ubuntu:20.04
-        ENV DEBIAN_FRONTEND=noninteractive
-        
-        # Essential packages only
-        RUN apt-get update && apt-get install -y --no-install-recommends \
-            wget curl supervisor nginx && \
-            rm -rf /var/lib/apt/lists/*
-            
-        # Install custom package
-        COPY onlyoffice-communityserver-custom.deb /tmp/
-        RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
-            rm /tmp/onlyoffice-communityserver-custom.deb
-        
-        LABEL version="${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}"
-        EXPOSE 80 443
-        CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
-        EOF
-        
-        # Build with BuildKit for speed
-        DOCKER_BUILDKIT=1 docker build --progress=plain -t onlyoffice-custom-mail:latest .
-        
-        # Compress and save
-        docker save onlyoffice-custom-mail:latest | gzip -1 > onlyoffice-custom-mail-image.tar.gz
-        
-        echo "📦 Image size: $(ls -lh onlyoffice-custom-mail-image.tar.gz | awk '{print $5}')"
-        
-    - name: Upload Docker image
-      uses: actions/upload-artifact@v4
-      with:
-        name: onlyoffice-docker-${{ github.run_number }}
-        path: onlyoffice-custom-mail-image.tar.gz
-        retention-days: 3) {
+              if ($trimmedLine -match '^([^=]+)\s*=\s*([^=]+)$') {
                 $leftSide = $matches[1].Trim()
                 if ($leftSide -and $leftSide -ne "" -and $leftSide -notlike "*GlobalSection*" -and $leftSide -notlike "*EndGlobalSection*") {
                   $validConfigs += $leftSide
@@ -968,18 +319,16 @@ jobs:
             }
           }
           
-          # Method 2: Extract from ProjectConfigurationPlatforms if first method fails
           if (-not $configFound -or $validConfigs.Count -eq 0) {
             Write-Host "Trying ProjectConfigurationPlatforms method..."
             if ($content -match 'GlobalSection\(ProjectConfigurationPlatforms\)\s*=\s*postSolution(.*?)EndGlobalSection') {
               $projectConfigSection = $matches[1]
               
-              # Extract unique configurations from project mappings
               $configPattern = '\.([^|]+\|[^.]+)\.'
-              $matches = [regex]::Matches($projectConfigSection, $configPattern)
+              $regexMatches = [regex]::Matches($projectConfigSection, $configPattern)
               
               $uniqueConfigs = @{}
-              foreach ($match in $matches) {
+              foreach ($match in $regexMatches) {
                 $config = $match.Groups[1].Value
                 if ($config -and -not $uniqueConfigs.ContainsKey($config)) {
                   $uniqueConfigs[$config] = $true
@@ -991,7 +340,6 @@ jobs:
             }
           }
           
-          # Method 3: Fallback - use common .NET configurations
           if (-not $configFound -or $validConfigs.Count -eq 0) {
             Write-Host "No configurations found in solution, using standard .NET configurations"
             $validConfigs = @(
@@ -1004,17 +352,14 @@ jobs:
             )
           }
           
-          # Save configurations and also create a priority list
           $validConfigs | Out-File -FilePath "valid_configs.txt" -Encoding UTF8
           
-          # Create priority order (Release first, then Debug, Any CPU preferred)
           $priorityConfigs = @()
           $priorityConfigs += $validConfigs | Where-Object { $_ -like "Release*Any CPU*" }
           $priorityConfigs += $validConfigs | Where-Object { $_ -like "Release*" -and $_ -notlike "*Any CPU*" }
           $priorityConfigs += $validConfigs | Where-Object { $_ -like "Debug*Any CPU*" }
           $priorityConfigs += $validConfigs | Where-Object { $_ -like "Debug*" -and $_ -notlike "*Any CPU*" }
           
-          # Remove duplicates while preserving order
           $finalConfigs = @()
           foreach ($config in $priorityConfigs) {
             if ($finalConfigs -notcontains $config) {
@@ -1022,7 +367,6 @@ jobs:
             }
           }
           
-          # Add any remaining configs
           foreach ($config in $validConfigs) {
             if ($finalConfigs -notcontains $config) {
               $finalConfigs += $config
@@ -1043,14 +387,11 @@ jobs:
             Write-Host "Found alternative solution files:"
             $solutionFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
             
-            # Use the first solution file found
             $altSolution = $solutionFiles[0].FullName
             Write-Host "Using: $altSolution"
             
-            # Copy it to Studio.sln for the rest of the workflow
             Copy-Item $altSolution "Studio.sln"
             
-            # Create basic configuration
             @("Release|Any CPU", "Debug|Any CPU") | Out-File -FilePath "valid_configs.txt" -Encoding UTF8
             @("Release|Any CPU", "Debug|Any CPU") | Out-File -FilePath "priority_configs.txt" -Encoding UTF8
           } else {
@@ -1066,7 +407,6 @@ jobs:
         Write-Host "📦 NuGet restore after fixing RuntimeIdentifiers..."
         
         if (Test-Path "Studio.sln") {
-          # First, try standard NuGet restore
           Write-Host "Running nuget restore..."
           nuget restore Studio.sln -Verbosity normal -NonInteractive
           
@@ -1076,648 +416,26 @@ jobs:
           }
         }
         
-    - name: Try building with discovered configurations
+    - name: Try building with discovered configurations (improved)
       shell: pwsh
       run: |
-        Write-Host "🏗️ Building with valid configurations..."
+        Write-Host "🏗️ Building with discovered configurations..."
         
         $buildSuccess = $false
         
-        if ((Test-Path "Studio.sln") -and (Test-Path "valid_configs.txt")) {
-          $validConfigs = Get-Content "valid_configs.txt"
+        $configFile = if (Test-Path "priority_configs.txt") { "priority_configs.txt" } else { "valid_configs.txt" }
+        
+        if ((Test-Path "Studio.sln") -and (Test-Path $configFile)) {
+          $validConfigs = Get-Content $configFile
           
-          Write-Host "Trying valid configurations:"
+          Write-Host "Trying configurations in priority order:"
           foreach ($config in $validConfigs) {
-            Write-Host "Attempting: '$config'"
+            Write-Host "🔨 Attempting: '$config'"
             
             if ($config -match '^([^|]+)\|(.+)$') {
               $configuration = $matches[1].Trim()
               $platform = $matches[2].Trim()
               
-              Write-Host "  Configuration: '$configuration'"
-              Write-Host "  Platform: '$platform'"
-              
-              try {
-                $startTime = Get-Date
-                msbuild Studio.sln /p:Configuration="$configuration" /p:Platform="$platform" /verbosity:minimal /maxcpucount /p:TreatWarningsAsErrors=false /p:WarningLevel=1
-                $endTime = Get-Date
-                $duration = $endTime - $startTime
-                
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "✅ BUILD SUCCESS with $configuration|$platform (took $($duration.TotalMinutes.ToString('F1')) minutes)"
-                  $buildSuccess = $true
-                  echo "SOLUTION_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-                  echo "BUILD_CONFIG=$configuration" >> $env:GITHUB_ENV
-                  echo "BUILD_PLATFORM=$platform" >> $env:GITHUB_ENV
-                  break
-                } else {
-                  Write-Host "❌ Build failed with exit code: $LASTEXITCODE (took $($duration.TotalSeconds.ToString('F1')) seconds)"
-                }
-              } catch {
-                Write-Host "❌ Build exception: $($_.Exception.Message)"
-              }
-            } else {
-              Write-Host "⚠️ Invalid config format: '$config'"
-            }
-          }
-        }
-        
-        if (-not $buildSuccess) {
-          Write-Host "⚠️ All solution configurations failed"
-          echo "SOLUTION_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-        }
-        
-    - name: Build just the mail module (if solution failed)
-      if: env.SOLUTION_BUILD_SUCCESS != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "🎯 Building only the mail module..."
-        
-        # Build critical dependencies first
-        $criticalDeps = @(
-          "common/ASC.Common/ASC.Common.csproj",
-          "common/ASC.Core.Common/ASC.Core.Common.csproj"
-        )
-        
-        Write-Host "Building critical dependencies first..."
-        foreach ($dep in $criticalDeps) {
-          if (Test-Path $dep) {
-            Write-Host "Building dependency: $dep"
-            
-            # Try multiple approaches for each dependency
-            $depBuilt = $false
-            
-            # Approach 1: dotnet build
-            try {
-              Write-Host "  Trying dotnet build..."
-              dotnet build $dep --configuration Release --verbosity normal
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "  ✅ dotnet build succeeded"
-                $depBuilt = $true
-              }
-            } catch {
-              Write-Host "  ❌ dotnet build failed"
-            }
-            
-            # Approach 2: MSBuild if dotnet failed
-            if (-not $depBuilt) {
-              try {
-                Write-Host "  Trying MSBuild..."
-                msbuild $dep /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "  ✅ MSBuild succeeded"
-                  $depBuilt = $true
-                }
-              } catch {
-                Write-Host "  ❌ MSBuild failed"
-              }
-            }
-            
-            if (-not $depBuilt) {
-              Write-Host "  ⚠️ Could not build $dep"
-            }
-          }
-        }
-        
-        # Now try to build the mail module
-        $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        if (Test-Path $mailProject) {
-          Write-Host "`nBuilding mail module: $mailProject"
-          
-          $mailBuilt = $false
-          
-          # Try dotnet build first
-          try {
-            Write-Host "Trying dotnet build for mail module..."
-            dotnet build $mailProject --configuration Release --verbosity normal
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Mail module built with dotnet build"
-              $mailBuilt = $true
-              echo "MAIL_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-            }
-          } catch {
-            Write-Host "dotnet build failed for mail module"
-          }
-          
-          # Try MSBuild if dotnet failed
-          if (-not $mailBuilt) {
-            try {
-              Write-Host "Trying MSBuild for mail module..."
-              msbuild $mailProject /p:Configuration=Release /p:Platform="Any CPU" /verbosity:normal
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Mail module built with MSBuild"
-                $mailBuilt = $true
-                echo "MAIL_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-              }
-            } catch {
-              Write-Host "MSBuild also failed for mail module"
-            }
-          }
-          
-          if (-not $mailBuilt) {
-            Write-Host "❌ Could not build mail module with any method"
-            echo "MAIL_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-          }
-        } else {
-          Write-Host "❌ Mail project not found at: $mailProject"
-          echo "MAIL_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-        }
-        
-    - name: Comprehensive assembly search
-      id: verify-build
-      shell: pwsh
-      run: |
-        Write-Host "🔍 Comprehensive search for built assemblies..."
-        $success = $false
-        $foundDlls = @()
-        
-        # Search for ASC.Mail.dll specifically
-        Write-Host "Searching for ASC.Mail.dll files..."
-        try {
-          $mailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
-          
-          foreach ($dll in $mailDlls) {
-            $size = $dll.Length
-            $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-            
-            Write-Host "Found ASC.Mail.dll:"
-            Write-Host "  📍 Path: $relativePath"
-            Write-Host "  📏 Size: $size bytes"
-            Write-Host "  📅 Modified: $($dll.LastWriteTime)"
-            
-            # Check if it's a real assembly
-            if ($size -gt 10000) {
-              try {
-                $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName)
-                Write-Host "  📋 Version: $($fileInfo.FileVersion)"
-                Write-Host "  ✅ Valid assembly"
-                
-                $foundDlls += @{
-                  Path = $relativePath
-                  Size = $size
-                  FullPath = $dll.FullName
-                }
-                $success = $true
-              } catch {
-                if ($size -gt 50000) {
-                  Write-Host "  ✅ Large file, likely valid (version check failed)"
-                  $foundDlls += @{
-                    Path = $relativePath
-                    Size = $size
-                    FullPath = $dll.FullName
-                  }
-                  $success = $true
-                } else {
-                  Write-Host "  ⚠️ Cannot verify and size suspicious"
-                }
-              }
-            } else {
-              Write-Host "  ❌ Too small - likely stub file"
-            }
-          }
-        } catch {
-          Write-Host "Error searching for ASC.Mail.dll: $($_.Exception.Message)"
-        }
-        
-        # Also search for any mail-related assemblies
-        Write-Host "`nSearching for other mail-related assemblies..."
-        try {
-          $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Length -gt 1000 -and $_.Name -ne "ASC.Mail.dll" } | 
-            Sort-Object Length -Descending
-          
-          if ($otherMailDlls) {
-            Write-Host "Other mail-related DLLs:"
-            foreach ($dll in $otherMailDlls) {
-              $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-              Write-Host "  📄 $relativePath ($($dll.Length) bytes)"
-            }
-          } else {
-            Write-Host "No other mail-related DLLs found"
-          }
-        } catch {
-          Write-Host "Error searching for other mail DLLs: $($_.Exception.Message)"
-        }
-        
-        # Show what actually got built (top 20 largest DLLs)
-        Write-Host "`nLargest DLLs in bin directories:"
-        try {
-          $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
-            Where-Object { $_.DirectoryName -like "*bin*" } | 
-            Sort-Object Length -Descending | 
-            Select-Object -First 20
-            
-          if ($binDlls) {
-            foreach ($dll in $binDlls) {
-              $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-              $sizeKB = [math]::Round($dll.Length / 1024, 1)
-              Write-Host "  📄 $relativePath ($sizeKB KB)"
-            }
-          } else {
-            Write-Host "No DLLs found in bin directories"
-          }
-        } catch {
-          Write-Host "Error listing bin DLLs: $($_.Exception.Message)"
-        }
-        
-        # Report which build method worked
-        if ($env:SOLUTION_BUILD_SUCCESS -eq "true") {
-          Write-Host "`n🎯 Solution build was successful ($env:BUILD_CONFIG|$env:BUILD_PLATFORM)"
-        } elseif ($env:MAIL_BUILD_SUCCESS -eq "true") {
-          Write-Host "`n🎯 Individual mail module build was successful"
-        } else {
-          Write-Host "`n⚠️ No successful builds detected"
-        }
-        
-        # Final verification
-        if ($success -and $foundDlls.Count -gt 0) {
-          # Sort by size and pick the largest valid DLL
-          $sortedDlls = $foundDlls | Sort-Object Size -Descending
-          $primaryDll = $sortedDlls[0]
-          
-          Write-Host "`n✅ BUILD VERIFICATION SUCCESSFUL!"
-          Write-Host "Primary ASC.Mail.dll: $($primaryDll.Path)"
-          Write-Host "Size: $($primaryDll.Size) bytes"
-          
-          echo "success=true" >> $env:GITHUB_OUTPUT
-          echo "main_dll_path=$($primaryDll.Path)" >> $env:GITHUB_OUTPUT
-          echo "main_dll_dir=$(Split-Path $($primaryDll.Path) -Parent)" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Host "`n❌ NO VALID ASC.MAIL.DLL FOUND"
-          Write-Host "Build appears to have failed completely"
-          echo "success=false" >> $env:GITHUB_OUTPUT
-        }
-        
-    - name: Upload build artifacts (always for debugging)
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-debug-${{ github.run_number }}
-        path: |
-          **/bin/**/*.dll
-          **/*Mail*.dll
-          **/*Mail*.pdb
-          valid_configs.txt
-          common/ASC.Common/ASC.Common.csproj
-        retention-days: 2
-        
-    - name: Upload successful mail module build
-      if: steps.verify-build.outputs.success == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: mail-module-build
-        path: |
-          ${{ steps.verify-build.outputs.main_dll_dir }}/**/*Mail*
-        retention-days: 1
-
-  # Streamlined package creation
-  create-custom-package:
-    needs: [prepare-environment, build-mail-module]
-    runs-on: ubuntu-latest
-    if: always() && (needs.prepare-environment.result == 'success' || needs.prepare-environment.result == 'skipped')
-    
-    steps:
-    - name: Checkout code (for fallback)
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-        
-    - name: Check job dependencies
-      run: |
-        echo "=== JOB DEPENDENCY STATUS ==="
-        echo "prepare-environment result: ${{ needs.prepare-environment.result }}"
-        echo "build-mail-module result: ${{ needs.build-mail-module.result }}"
-        echo "prepare-environment outputs:"
-        echo "  cache-hit-deb: ${{ needs.prepare-environment.outputs.cache-hit-deb }}"
-        echo "  cache-hit-extracted: ${{ needs.prepare-environment.outputs.cache-hit-extracted }}"
-        echo "  skip-build: ${{ needs.prepare-environment.outputs.skip-build }}"
-        
-    - name: Try to restore cached package
-      id: restore-cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          onlyoffice-communityserver.deb
-          official-package/
-        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') }}
-        restore-keys: |
-          onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-
-          onlyoffice-extracted-v2-
-          
-    - name: Download artifacts from preparation job (fallback)
-      if: steps.restore-cache.outputs.cache-hit != 'true'
-      uses: actions/download-artifact@v4
-      continue-on-error: true
-      with:
-        name: extracted-onlyoffice-package
-        
-    - name: Verify package availability
-      run: |
-        echo "🔍 Checking package availability..."
-        
-        if [ -d "official-package" ] && [ -f "onlyoffice-communityserver.deb" ]; then
-          echo "✅ Package available from cache/artifacts"
-          echo "📦 DEB size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
-          echo "📁 Extracted files: $(find official-package -type f | wc -l)"
-        else
-          echo "❌ Package not available, need to download and extract"
-          
-          # Emergency download if nothing is available
-          echo "🚨 Emergency package download..."
-          
-          # Install dependencies
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wget dpkg-dev apt-transport-https ca-certificates
-          
-          # Add OnlyOffice APT repository
-          echo "🔧 Adding OnlyOffice repository..."
-          wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
-          echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
-          
-          # Update package lists
-          sudo apt-get update -qq
-          
-          download_success=false
-          
-          # Try to download the package using apt-get download
-          echo "📦 Downloading OnlyOffice Community Server..."
-          
-          # Download to current directory instead of /tmp
-          if apt-get download onlyoffice-communityserver 2>/dev/null; then
-            deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-            if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              # Rename to standard name if needed
-              if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
-                mv "$deb_file" onlyoffice-communityserver.deb
-              fi
-              echo "✅ Emergency download successful!"
-              download_success=true
-            fi
-          fi
-          
-          # Fallback: Try alternative repository
-          if [ "$download_success" = false ]; then
-            echo "🔄 Trying alternative repository..."
-            echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
-            sudo apt-get update -qq
-            
-            if apt-get download onlyoffice-communityserver 2>/dev/null; then
-              deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-              if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-                if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
-                  mv "$deb_file" onlyoffice-communityserver.deb
-                fi
-                echo "✅ Alternative repository download successful!"
-                download_success=true
-              fi
-            fi
-          fi
-          
-          if [ "$download_success" = false ]; then
-            echo "❌ Emergency download failed"
-            exit 1
-          fi
-          
-          # Extract the package
-          echo "📦 Emergency extraction..."
-          mkdir -p official-package
-          dpkg-deb -x onlyoffice-communityserver.deb official-package/
-          dpkg-deb -e onlyoffice-communityserver.deb official-package/DEBIAN/
-          
-          echo "✅ Emergency package preparation complete"
-        fi
-        
-    - name: Download build artifacts (conditional)
-      if: needs.build-mail-module.outputs.build-success == 'true'
-      uses: actions/download-artifact@v4
-      continue-on-error: true
-      with:
-        name: mail-module-build
-        path: build-output/
-        
-    - name: Fast package creation
-      run: |
-        echo "🚀 Fast package creation..."
-        
-        # Verify we have the source package
-        if [ ! -d "official-package" ]; then
-          echo "❌ official-package directory still not found!"
-          echo "Available directories:"
-          ls -la
-          exit 1
-        fi
-        
-        # Quick copy
-        echo "📋 Copying package structure..."
-        cp -r official-package custom-package
-        
-        echo "✅ Package structure copied"
-        echo "📊 Files in custom package: $(find custom-package -type f | wc -l)"
-        
-        # Replace mail module if we have a new one  
-        if [ -d "build-output/" ]; then
-          echo "📋 Searching for built mail assemblies..."
-          
-          # Find any ASC.Mail.dll files in the build output
-          mail_dlls=$(find build-output -name "ASC.Mail.dll" -type f 2>/dev/null || true)
-          
-          if [ -n "$mail_dlls" ]; then
-            echo "✅ Found compiled mail assemblies:"
-            echo "$mail_dlls"
-            
-            # Get the largest DLL file (most likely the main one)
-            main_dll=$(echo "$mail_dlls" | xargs ls -la | sort -k5 -nr | head -1 | awk '{print $NF}')
-            echo "📋 Using primary DLL: $main_dll"
-            
-            # Find all ASC.Mail.dll locations in the package and replace them
-            package_dlls=$(find custom-package -name "ASC.Mail.dll" -type f 2>/dev/null || true)
-            
-            if [ -n "$package_dlls" ]; then
-              echo "🔄 Replacing mail assemblies in package:"
-              while IFS= read -r dll_path; do
-                if [ -f "$dll_path" ]; then
-                  cp "$main_dll" "$dll_path"
-                  echo "  ✅ Updated: $dll_path"
-                fi
-              done <<< "$package_dlls"
-              
-              # Also copy any related files (PDB, XML, etc.)
-              main_dll_dir=$(dirname "$main_dll")
-              for ext in pdb xml exe.config; do
-                if [ -f "${main_dll_dir}/ASC.Mail.$ext" ]; then
-                  while IFS= read -r dll_path; do
-                    base_path="${dll_path%.dll}.$ext"
-                    base_dir=$(dirname "$dll_path")
-                    if [ -f "$base_path" ] || [ -d "$base_dir" ]; then
-                      cp "${main_dll_dir}/ASC.Mail.$ext" "$base_dir/" 2>/dev/null || true
-                      echo "  ✅ Updated: ASC.Mail.$ext in $base_dir"
-                    fi
-                  done <<< "$package_dlls"
-                fi
-              done
-              
-            else
-              echo "⚠️ No ASC.Mail.dll files found in package to replace"
-              # Create a new directory for the compiled assemblies
-              mkdir -p custom-package/opt/onlyoffice/CommunityServer/bin/
-              echo "$mail_dlls" | while read -r dll; do
-                if [ -f "$dll" ]; then
-                  cp "$dll" custom-package/opt/onlyoffice/CommunityServer/bin/
-                  echo "  ✅ Added: $(basename "$dll") to package"
-                fi
-              done
-            fi
-            
-          else
-            echo "ℹ️ No ASC.Mail.dll found in build output, using original mail module"
-            echo "Available files in build-output:"
-            find build-output -name "*.dll" -type f | head -10 || echo "No DLL files found"
-          fi
-        else
-          echo "ℹ️ No build output available, using original mail module"
-        fi
-        
-        # Comprehensive permission fix
-        if [ -d "custom-package/DEBIAN" ]; then
-          echo "🔧 Fixing DEBIAN script permissions..."
-          
-          # Make all maintainer scripts executable (must be >=0555 and <=0775)
-          for script in preinst postinst prerm postrm config templates; do
-            if [ -f "custom-package/DEBIAN/$script" ]; then
-              chmod 755 "custom-package/DEBIAN/$script"
-              echo "✅ Fixed $script: $(ls -la custom-package/DEBIAN/$script | awk '{print $1}')"
-            fi
-          done
-          
-          # Control and conffiles should be readable only
-          chmod 644 custom-package/DEBIAN/control 2>/dev/null || true
-          chmod 644 custom-package/DEBIAN/conffiles 2>/dev/null || true
-          chmod 644 custom-package/DEBIAN/md5sums 2>/dev/null || true
-          
-          echo "📋 Final DEBIAN permissions:"
-          ls -la custom-package/DEBIAN/ | head -5
-        fi
-        
-        # Quick metadata update
-        if [ -f "custom-package/DEBIAN/control" ]; then
-          sed -i "s/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/" custom-package/DEBIAN/control
-          sed -i "s/Version: \(.*\)/Version: \1-custom-${{ github.run_number }}/" custom-package/DEBIAN/control
-        fi
-        
-        # Validate package structure before building
-        echo "🔍 Validating package structure..."
-        
-        if [ ! -d "custom-package" ]; then
-          echo "❌ Custom package directory not found!"
-          exit 1
-        fi
-        
-        if [ ! -d "custom-package/DEBIAN" ]; then
-          echo "❌ DEBIAN directory not found!"
-          exit 1
-        fi
-        
-        if [ ! -f "custom-package/DEBIAN/control" ]; then
-          echo "❌ Control file not found!"
-          exit 1
-        fi
-        
-        echo "✅ Package structure validated"
-        echo "📊 Total files: $(find custom-package -type f | wc -l)"
-        echo "📦 Package size: $(du -sh custom-package | cut -f1)"
-        
-        # Build package with better error handling
-        echo "🔨 Building DEB package..."
-        
-        sudo chown -R root:root custom-package/
-        
-        if dpkg-deb --build custom-package onlyoffice-communityserver-custom.deb 2>&1; then
-          echo "✅ Package built successfully!"
-          
-          # Validate the final package
-          if [ -f "onlyoffice-communityserver-custom.deb" ] && [ -s "onlyoffice-communityserver-custom.deb" ]; then
-            echo "📦 Final package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
-            
-            # Quick package validation
-            echo "🔍 Validating package integrity..."
-            if dpkg-deb --info onlyoffice-communityserver-custom.deb >/dev/null 2>&1; then
-              echo "✅ Package validation passed!"
-            else
-              echo "⚠️ Package validation warnings (may still be usable)"
-            fi
-          else
-            echo "❌ Package file is missing or empty"
-            exit 1
-          fi
-        else
-          echo "❌ Package build failed!"
-          echo "📋 DEBIAN directory final state:"
-          ls -la custom-package/DEBIAN/
-          exit 1
-        fi
-        
-    - name: Upload custom package
-      uses: actions/upload-artifact@v4
-      with:
-        name: onlyoffice-custom-${{ github.run_number }}
-        path: onlyoffice-communityserver-custom.deb
-        retention-days: 7  # Reduced retention
-
-  # Optional Docker build
-  build-docker:
-    needs: create-custom-package
-    runs-on: ubuntu-latest
-    if: needs.create-custom-package.result == 'success' && github.event.inputs.skip_docker != 'true'
-    
-    steps:
-    - name: Download custom package
-      uses: actions/download-artifact@v4
-      with:
-        name: onlyoffice-custom-${{ github.run_number }}
-        
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Fast Docker build
-      run: |
-        # Streamlined Dockerfile
-        cat > Dockerfile << 'EOF'
-        FROM ubuntu:20.04
-        ENV DEBIAN_FRONTEND=noninteractive
-        
-        # Essential packages only
-        RUN apt-get update && apt-get install -y --no-install-recommends \
-            wget curl supervisor nginx && \
-            rm -rf /var/lib/apt/lists/*
-            
-        # Install custom package
-        COPY onlyoffice-communityserver-custom.deb /tmp/
-        RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
-            rm /tmp/onlyoffice-communityserver-custom.deb
-        
-        LABEL version="${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}"
-        EXPOSE 80 443
-        CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
-        EOF
-        
-        # Build with BuildKit for speed
-        DOCKER_BUILDKIT=1 docker build --progress=plain -t onlyoffice-custom-mail:latest .
-        
-        # Compress and save
-        docker save onlyoffice-custom-mail:latest | gzip -1 > onlyoffice-custom-mail-image.tar.gz
-        
-        echo "📦 Image size: $(ls -lh onlyoffice-custom-mail-image.tar.gz | awk '{print $5}')"
-        
-    - name: Upload Docker image
-      uses: actions/upload-artifact@v4
-      with:
-        name: onlyoffice-docker-${{ github.run_number }}
-        path: onlyoffice-custom-mail-image.tar.gz
-        retention-days: 3) {
-              $configuration = $matches[1].Trim()
-              $platform = $matches[2].Trim()
-              
-              # Normalize platform names
               if ($platform -eq "Any CPU") { $platform = "AnyCPU" }
               
               Write-Host "  Configuration: '$configuration'"
@@ -1726,7 +444,6 @@ jobs:
               try {
                 $startTime = Get-Date
                 
-                # Use more robust build parameters
                 $buildArgs = @(
                   "Studio.sln"
                   "/p:Configuration=$configuration"
@@ -1743,7 +460,6 @@ jobs:
                 
                 Write-Host "  Running: msbuild $($buildArgs -join ' ')"
                 
-                # Run MSBuild with error capture
                 $output = & msbuild $buildArgs 2>&1
                 $exitCode = $LASTEXITCODE
                 
@@ -1760,7 +476,6 @@ jobs:
                 } else {
                   Write-Host "❌ Build failed with exit code: $exitCode (took $($duration.TotalSeconds.ToString('F1')) seconds)"
                   
-                  # Show last few lines of build output for debugging
                   $outputLines = $output -split "`n"
                   $errorLines = $outputLines | Where-Object { $_ -like "*error*" -or $_ -like "*failed*" } | Select-Object -Last 5
                   if ($errorLines) {
@@ -1792,7 +507,6 @@ jobs:
       run: |
         Write-Host "🎯 Building only the mail module..."
         
-        # Build critical dependencies first
         $criticalDeps = @(
           "common/ASC.Common/ASC.Common.csproj",
           "common/ASC.Core.Common/ASC.Core.Common.csproj"
@@ -1803,10 +517,8 @@ jobs:
           if (Test-Path $dep) {
             Write-Host "Building dependency: $dep"
             
-            # Try multiple approaches for each dependency
             $depBuilt = $false
             
-            # Approach 1: dotnet build
             try {
               Write-Host "  Trying dotnet build..."
               dotnet build $dep --configuration Release --verbosity normal
@@ -1818,7 +530,6 @@ jobs:
               Write-Host "  ❌ dotnet build failed"
             }
             
-            # Approach 2: MSBuild if dotnet failed
             if (-not $depBuilt) {
               try {
                 Write-Host "  Trying MSBuild..."
@@ -1838,14 +549,12 @@ jobs:
           }
         }
         
-        # Now try to build the mail module
         $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
         if (Test-Path $mailProject) {
           Write-Host "`nBuilding mail module: $mailProject"
           
           $mailBuilt = $false
           
-          # Try dotnet build first
           try {
             Write-Host "Trying dotnet build for mail module..."
             dotnet build $mailProject --configuration Release --verbosity normal
@@ -1858,7 +567,6 @@ jobs:
             Write-Host "dotnet build failed for mail module"
           }
           
-          # Try MSBuild if dotnet failed
           if (-not $mailBuilt) {
             try {
               Write-Host "Trying MSBuild for mail module..."
@@ -1890,7 +598,6 @@ jobs:
         $success = $false
         $foundDlls = @()
         
-        # Search for ASC.Mail.dll specifically
         Write-Host "Searching for ASC.Mail.dll files..."
         try {
           $mailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
@@ -1904,7 +611,6 @@ jobs:
             Write-Host "  📏 Size: $size bytes"
             Write-Host "  📅 Modified: $($dll.LastWriteTime)"
             
-            # Check if it's a real assembly
             if ($size -gt 10000) {
               try {
                 $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName)
@@ -1938,7 +644,6 @@ jobs:
           Write-Host "Error searching for ASC.Mail.dll: $($_.Exception.Message)"
         }
         
-        # Also search for any mail-related assemblies
         Write-Host "`nSearching for other mail-related assemblies..."
         try {
           $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
@@ -1958,7 +663,6 @@ jobs:
           Write-Host "Error searching for other mail DLLs: $($_.Exception.Message)"
         }
         
-        # Show what actually got built (top 20 largest DLLs)
         Write-Host "`nLargest DLLs in bin directories:"
         try {
           $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
@@ -1979,7 +683,6 @@ jobs:
           Write-Host "Error listing bin DLLs: $($_.Exception.Message)"
         }
         
-        # Report which build method worked
         if ($env:SOLUTION_BUILD_SUCCESS -eq "true") {
           Write-Host "`n🎯 Solution build was successful ($env:BUILD_CONFIG|$env:BUILD_PLATFORM)"
         } elseif ($env:MAIL_BUILD_SUCCESS -eq "true") {
@@ -1988,9 +691,7 @@ jobs:
           Write-Host "`n⚠️ No successful builds detected"
         }
         
-        # Final verification
         if ($success -and $foundDlls.Count -gt 0) {
-          # Sort by size and pick the largest valid DLL
           $sortedDlls = $foundDlls | Sort-Object Size -Descending
           $primaryDll = $sortedDlls[0]
           
@@ -2029,7 +730,6 @@ jobs:
           ${{ steps.verify-build.outputs.main_dll_dir }}/**/*Mail*
         retention-days: 1
 
-  # Streamlined package creation
   create-custom-package:
     needs: [prepare-environment, build-mail-module]
     runs-on: ubuntu-latest
@@ -2081,31 +781,24 @@ jobs:
         else
           echo "❌ Package not available, need to download and extract"
           
-          # Emergency download if nothing is available
           echo "🚨 Emergency package download..."
           
-          # Install dependencies
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends wget dpkg-dev apt-transport-https ca-certificates
           
-          # Add OnlyOffice APT repository
           echo "🔧 Adding OnlyOffice repository..."
           wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
           echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
           
-          # Update package lists
           sudo apt-get update -qq
           
           download_success=false
           
-          # Try to download the package using apt-get download
           echo "📦 Downloading OnlyOffice Community Server..."
           
-          # Download to current directory instead of /tmp
           if apt-get download onlyoffice-communityserver 2>/dev/null; then
             deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
             if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              # Rename to standard name if needed
               if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
                 mv "$deb_file" onlyoffice-communityserver.deb
               fi
@@ -2114,7 +807,6 @@ jobs:
             fi
           fi
           
-          # Fallback: Try alternative repository
           if [ "$download_success" = false ]; then
             echo "🔄 Trying alternative repository..."
             echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
@@ -2137,7 +829,6 @@ jobs:
             exit 1
           fi
           
-          # Extract the package
           echo "📦 Emergency extraction..."
           mkdir -p official-package
           dpkg-deb -x onlyoffice-communityserver.deb official-package/
@@ -2158,7 +849,6 @@ jobs:
       run: |
         echo "🚀 Fast package creation..."
         
-        # Verify we have the source package
         if [ ! -d "official-package" ]; then
           echo "❌ official-package directory still not found!"
           echo "Available directories:"
@@ -2166,29 +856,24 @@ jobs:
           exit 1
         fi
         
-        # Quick copy
         echo "📋 Copying package structure..."
         cp -r official-package custom-package
         
         echo "✅ Package structure copied"
         echo "📊 Files in custom package: $(find custom-package -type f | wc -l)"
         
-        # Replace mail module if we have a new one  
         if [ -d "build-output/" ]; then
           echo "📋 Searching for built mail assemblies..."
           
-          # Find any ASC.Mail.dll files in the build output
           mail_dlls=$(find build-output -name "ASC.Mail.dll" -type f 2>/dev/null || true)
           
           if [ -n "$mail_dlls" ]; then
             echo "✅ Found compiled mail assemblies:"
             echo "$mail_dlls"
             
-            # Get the largest DLL file (most likely the main one)
             main_dll=$(echo "$mail_dlls" | xargs ls -la | sort -k5 -nr | head -1 | awk '{print $NF}')
             echo "📋 Using primary DLL: $main_dll"
             
-            # Find all ASC.Mail.dll locations in the package and replace them
             package_dlls=$(find custom-package -name "ASC.Mail.dll" -type f 2>/dev/null || true)
             
             if [ -n "$package_dlls" ]; then
@@ -2200,7 +885,6 @@ jobs:
                 fi
               done <<< "$package_dlls"
               
-              # Also copy any related files (PDB, XML, etc.)
               main_dll_dir=$(dirname "$main_dll")
               for ext in pdb xml exe.config; do
                 if [ -f "${main_dll_dir}/ASC.Mail.$ext" ]; then
@@ -2217,7 +901,6 @@ jobs:
               
             else
               echo "⚠️ No ASC.Mail.dll files found in package to replace"
-              # Create a new directory for the compiled assemblies
               mkdir -p custom-package/opt/onlyoffice/CommunityServer/bin/
               echo "$mail_dlls" | while read -r dll; do
                 if [ -f "$dll" ]; then
@@ -2236,11 +919,9 @@ jobs:
           echo "ℹ️ No build output available, using original mail module"
         fi
         
-        # Comprehensive permission fix
         if [ -d "custom-package/DEBIAN" ]; then
           echo "🔧 Fixing DEBIAN script permissions..."
           
-          # Make all maintainer scripts executable (must be >=0555 and <=0775)
           for script in preinst postinst prerm postrm config templates; do
             if [ -f "custom-package/DEBIAN/$script" ]; then
               chmod 755 "custom-package/DEBIAN/$script"
@@ -2248,7 +929,6 @@ jobs:
             fi
           done
           
-          # Control and conffiles should be readable only
           chmod 644 custom-package/DEBIAN/control 2>/dev/null || true
           chmod 644 custom-package/DEBIAN/conffiles 2>/dev/null || true
           chmod 644 custom-package/DEBIAN/md5sums 2>/dev/null || true
@@ -2257,13 +937,11 @@ jobs:
           ls -la custom-package/DEBIAN/ | head -5
         fi
         
-        # Quick metadata update
         if [ -f "custom-package/DEBIAN/control" ]; then
           sed -i "s/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/" custom-package/DEBIAN/control
           sed -i "s/Version: \(.*\)/Version: \1-custom-${{ github.run_number }}/" custom-package/DEBIAN/control
         fi
         
-        # Validate package structure before building
         echo "🔍 Validating package structure..."
         
         if [ ! -d "custom-package" ]; then
@@ -2285,7 +963,6 @@ jobs:
         echo "📊 Total files: $(find custom-package -type f | wc -l)"
         echo "📦 Package size: $(du -sh custom-package | cut -f1)"
         
-        # Build package with better error handling
         echo "🔨 Building DEB package..."
         
         sudo chown -R root:root custom-package/
@@ -2293,11 +970,9 @@ jobs:
         if dpkg-deb --build custom-package onlyoffice-communityserver-custom.deb 2>&1; then
           echo "✅ Package built successfully!"
           
-          # Validate the final package
           if [ -f "onlyoffice-communityserver-custom.deb" ] && [ -s "onlyoffice-communityserver-custom.deb" ]; then
             echo "📦 Final package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
             
-            # Quick package validation
             echo "🔍 Validating package integrity..."
             if dpkg-deb --info onlyoffice-communityserver-custom.deb >/dev/null 2>&1; then
               echo "✅ Package validation passed!"
@@ -2320,9 +995,8 @@ jobs:
       with:
         name: onlyoffice-custom-${{ github.run_number }}
         path: onlyoffice-communityserver-custom.deb
-        retention-days: 7  # Reduced retention
+        retention-days: 7
 
-  # Optional Docker build
   build-docker:
     needs: create-custom-package
     runs-on: ubuntu-latest
@@ -2339,17 +1013,14 @@ jobs:
       
     - name: Fast Docker build
       run: |
-        # Streamlined Dockerfile
         cat > Dockerfile << 'EOF'
         FROM ubuntu:20.04
         ENV DEBIAN_FRONTEND=noninteractive
         
-        # Essential packages only
         RUN apt-get update && apt-get install -y --no-install-recommends \
             wget curl supervisor nginx && \
             rm -rf /var/lib/apt/lists/*
             
-        # Install custom package
         COPY onlyoffice-communityserver-custom.deb /tmp/
         RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
             rm /tmp/onlyoffice-communityserver-custom.deb
@@ -2359,765 +1030,8 @@ jobs:
         CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
         EOF
         
-        # Build with BuildKit for speed
         DOCKER_BUILDKIT=1 docker build --progress=plain -t onlyoffice-custom-mail:latest .
         
-        # Compress and save
-        docker save onlyoffice-custom-mail:latest | gzip -1 > onlyoffice-custom-mail-image.tar.gz
-        
-        echo "📦 Image size: $(ls -lh onlyoffice-custom-mail-image.tar.gz | awk '{print $5}')"
-        
-    - name: Upload Docker image
-      uses: actions/upload-artifact@v4
-      with:
-        name: onlyoffice-docker-${{ github.run_number }}
-        path: onlyoffice-custom-mail-image.tar.gz
-        retention-days: 3) {
-                $leftSide = $matches[1].Trim()
-                if ($leftSide -and $leftSide -ne "" -and $leftSide -notlike "*GlobalSection*" -and $leftSide -notlike "*EndGlobalSection*") {
-                  $validConfigs += $leftSide
-                  Write-Host "✅ Found config: '$leftSide'"
-                }
-              }
-            }
-          }
-          
-          # Method 2: Extract from ProjectConfigurationPlatforms if first method fails
-          if (-not $configFound -or $validConfigs.Count -eq 0) {
-            Write-Host "Trying ProjectConfigurationPlatforms method..."
-            if ($content -match 'GlobalSection\(ProjectConfigurationPlatforms\)\s*=\s*postSolution(.*?)EndGlobalSection') {
-              $projectConfigSection = $matches[1]
-              
-              # Extract unique configurations from project mappings
-              $configPattern = '\.([^|]+\|[^.]+)\.'
-              $matches = [regex]::Matches($projectConfigSection, $configPattern)
-              
-              $uniqueConfigs = @{}
-              foreach ($match in $matches) {
-                $config = $match.Groups[1].Value
-                if ($config -and -not $uniqueConfigs.ContainsKey($config)) {
-                  $uniqueConfigs[$config] = $true
-                  $validConfigs += $config
-                  Write-Host "✅ Extracted config: '$config'"
-                }
-              }
-              $configFound = $true
-            }
-          }
-          
-          # Method 3: Fallback - use common .NET configurations
-          if (-not $configFound -or $validConfigs.Count -eq 0) {
-            Write-Host "No configurations found in solution, using standard .NET configurations"
-            $validConfigs = @(
-              "Release|Any CPU",
-              "Debug|Any CPU",
-              "Release|x64",
-              "Debug|x64",
-              "Release|x86",
-              "Debug|x86"
-            )
-          }
-          
-          # Save configurations and also create a priority list
-          $validConfigs | Out-File -FilePath "valid_configs.txt" -Encoding UTF8
-          
-          # Create priority order (Release first, then Debug, Any CPU preferred)
-          $priorityConfigs = @()
-          $priorityConfigs += $validConfigs | Where-Object { $_ -like "Release*Any CPU*" }
-          $priorityConfigs += $validConfigs | Where-Object { $_ -like "Release*" -and $_ -notlike "*Any CPU*" }
-          $priorityConfigs += $validConfigs | Where-Object { $_ -like "Debug*Any CPU*" }
-          $priorityConfigs += $validConfigs | Where-Object { $_ -like "Debug*" -and $_ -notlike "*Any CPU*" }
-          
-          # Remove duplicates while preserving order
-          $finalConfigs = @()
-          foreach ($config in $priorityConfigs) {
-            if ($finalConfigs -notcontains $config) {
-              $finalConfigs += $config
-            }
-          }
-          
-          # Add any remaining configs
-          foreach ($config in $validConfigs) {
-            if ($finalConfigs -notcontains $config) {
-              $finalConfigs += $config
-            }
-          }
-          
-          $finalConfigs | Out-File -FilePath "priority_configs.txt" -Encoding UTF8
-          
-          Write-Host "💾 Saved $($finalConfigs.Count) configurations in priority order:"
-          $finalConfigs | ForEach-Object { Write-Host "  $_" }
-          
-        } else {
-          Write-Host "❌ Studio.sln not found - looking for alternative solution files"
-          
-          $solutionFiles = Get-ChildItem -Path "." -Filter "*.sln" -Recurse | Where-Object { $_.Name -notlike "*packages*" }
-          
-          if ($solutionFiles) {
-            Write-Host "Found alternative solution files:"
-            $solutionFiles | ForEach-Object { Write-Host "  $($_.FullName)" }
-            
-            # Use the first solution file found
-            $altSolution = $solutionFiles[0].FullName
-            Write-Host "Using: $altSolution"
-            
-            # Copy it to Studio.sln for the rest of the workflow
-            Copy-Item $altSolution "Studio.sln"
-            
-            # Create basic configuration
-            @("Release|Any CPU", "Debug|Any CPU") | Out-File -FilePath "valid_configs.txt" -Encoding UTF8
-            @("Release|Any CPU", "Debug|Any CPU") | Out-File -FilePath "priority_configs.txt" -Encoding UTF8
-          } else {
-            Write-Host "⚠️ No solution files found - will try individual project builds"
-            @("Release|Any CPU") | Out-File -FilePath "valid_configs.txt" -Encoding UTF8
-            @("Release|Any CPU") | Out-File -FilePath "priority_configs.txt" -Encoding UTF8
-          }
-        }
-        
-    - name: NuGet restore with fixed projects
-      shell: pwsh
-      run: |
-        Write-Host "📦 NuGet restore after fixing RuntimeIdentifiers..."
-        
-        if (Test-Path "Studio.sln") {
-          # First, try standard NuGet restore
-          Write-Host "Running nuget restore..."
-          nuget restore Studio.sln -Verbosity normal -NonInteractive
-          
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Standard NuGet restore failed, trying dotnet restore..."
-            dotnet restore Studio.sln --verbosity normal
-          }
-        }
-        
-    - name: Try building with discovered configurations
-      shell: pwsh
-      run: |
-        Write-Host "🏗️ Building with valid configurations..."
-        
-        $buildSuccess = $false
-        
-        if ((Test-Path "Studio.sln") -and (Test-Path "valid_configs.txt")) {
-          $validConfigs = Get-Content "valid_configs.txt"
-          
-          Write-Host "Trying valid configurations:"
-          foreach ($config in $validConfigs) {
-            Write-Host "Attempting: '$config'"
-            
-            if ($config -match '^([^|]+)\|(.+)$') {
-              $configuration = $matches[1].Trim()
-              $platform = $matches[2].Trim()
-              
-              Write-Host "  Configuration: '$configuration'"
-              Write-Host "  Platform: '$platform'"
-              
-              try {
-                $startTime = Get-Date
-                msbuild Studio.sln /p:Configuration="$configuration" /p:Platform="$platform" /verbosity:minimal /maxcpucount /p:TreatWarningsAsErrors=false /p:WarningLevel=1
-                $endTime = Get-Date
-                $duration = $endTime - $startTime
-                
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "✅ BUILD SUCCESS with $configuration|$platform (took $($duration.TotalMinutes.ToString('F1')) minutes)"
-                  $buildSuccess = $true
-                  echo "SOLUTION_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-                  echo "BUILD_CONFIG=$configuration" >> $env:GITHUB_ENV
-                  echo "BUILD_PLATFORM=$platform" >> $env:GITHUB_ENV
-                  break
-                } else {
-                  Write-Host "❌ Build failed with exit code: $LASTEXITCODE (took $($duration.TotalSeconds.ToString('F1')) seconds)"
-                }
-              } catch {
-                Write-Host "❌ Build exception: $($_.Exception.Message)"
-              }
-            } else {
-              Write-Host "⚠️ Invalid config format: '$config'"
-            }
-          }
-        }
-        
-        if (-not $buildSuccess) {
-          Write-Host "⚠️ All solution configurations failed"
-          echo "SOLUTION_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-        }
-        
-    - name: Build just the mail module (if solution failed)
-      if: env.SOLUTION_BUILD_SUCCESS != 'true'
-      shell: pwsh
-      run: |
-        Write-Host "🎯 Building only the mail module..."
-        
-        # Build critical dependencies first
-        $criticalDeps = @(
-          "common/ASC.Common/ASC.Common.csproj",
-          "common/ASC.Core.Common/ASC.Core.Common.csproj"
-        )
-        
-        Write-Host "Building critical dependencies first..."
-        foreach ($dep in $criticalDeps) {
-          if (Test-Path $dep) {
-            Write-Host "Building dependency: $dep"
-            
-            # Try multiple approaches for each dependency
-            $depBuilt = $false
-            
-            # Approach 1: dotnet build
-            try {
-              Write-Host "  Trying dotnet build..."
-              dotnet build $dep --configuration Release --verbosity normal
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "  ✅ dotnet build succeeded"
-                $depBuilt = $true
-              }
-            } catch {
-              Write-Host "  ❌ dotnet build failed"
-            }
-            
-            # Approach 2: MSBuild if dotnet failed
-            if (-not $depBuilt) {
-              try {
-                Write-Host "  Trying MSBuild..."
-                msbuild $dep /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal
-                if ($LASTEXITCODE -eq 0) {
-                  Write-Host "  ✅ MSBuild succeeded"
-                  $depBuilt = $true
-                }
-              } catch {
-                Write-Host "  ❌ MSBuild failed"
-              }
-            }
-            
-            if (-not $depBuilt) {
-              Write-Host "  ⚠️ Could not build $dep"
-            }
-          }
-        }
-        
-        # Now try to build the mail module
-        $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        if (Test-Path $mailProject) {
-          Write-Host "`nBuilding mail module: $mailProject"
-          
-          $mailBuilt = $false
-          
-          # Try dotnet build first
-          try {
-            Write-Host "Trying dotnet build for mail module..."
-            dotnet build $mailProject --configuration Release --verbosity normal
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Mail module built with dotnet build"
-              $mailBuilt = $true
-              echo "MAIL_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-            }
-          } catch {
-            Write-Host "dotnet build failed for mail module"
-          }
-          
-          # Try MSBuild if dotnet failed
-          if (-not $mailBuilt) {
-            try {
-              Write-Host "Trying MSBuild for mail module..."
-              msbuild $mailProject /p:Configuration=Release /p:Platform="Any CPU" /verbosity:normal
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Mail module built with MSBuild"
-                $mailBuilt = $true
-                echo "MAIL_BUILD_SUCCESS=true" >> $env:GITHUB_ENV
-              }
-            } catch {
-              Write-Host "MSBuild also failed for mail module"
-            }
-          }
-          
-          if (-not $mailBuilt) {
-            Write-Host "❌ Could not build mail module with any method"
-            echo "MAIL_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-          }
-        } else {
-          Write-Host "❌ Mail project not found at: $mailProject"
-          echo "MAIL_BUILD_SUCCESS=false" >> $env:GITHUB_ENV
-        }
-        
-    - name: Comprehensive assembly search
-      id: verify-build
-      shell: pwsh
-      run: |
-        Write-Host "🔍 Comprehensive search for built assemblies..."
-        $success = $false
-        $foundDlls = @()
-        
-        # Search for ASC.Mail.dll specifically
-        Write-Host "Searching for ASC.Mail.dll files..."
-        try {
-          $mailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
-          
-          foreach ($dll in $mailDlls) {
-            $size = $dll.Length
-            $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-            
-            Write-Host "Found ASC.Mail.dll:"
-            Write-Host "  📍 Path: $relativePath"
-            Write-Host "  📏 Size: $size bytes"
-            Write-Host "  📅 Modified: $($dll.LastWriteTime)"
-            
-            # Check if it's a real assembly
-            if ($size -gt 10000) {
-              try {
-                $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName)
-                Write-Host "  📋 Version: $($fileInfo.FileVersion)"
-                Write-Host "  ✅ Valid assembly"
-                
-                $foundDlls += @{
-                  Path = $relativePath
-                  Size = $size
-                  FullPath = $dll.FullName
-                }
-                $success = $true
-              } catch {
-                if ($size -gt 50000) {
-                  Write-Host "  ✅ Large file, likely valid (version check failed)"
-                  $foundDlls += @{
-                    Path = $relativePath
-                    Size = $size
-                    FullPath = $dll.FullName
-                  }
-                  $success = $true
-                } else {
-                  Write-Host "  ⚠️ Cannot verify and size suspicious"
-                }
-              }
-            } else {
-              Write-Host "  ❌ Too small - likely stub file"
-            }
-          }
-        } catch {
-          Write-Host "Error searching for ASC.Mail.dll: $($_.Exception.Message)"
-        }
-        
-        # Also search for any mail-related assemblies
-        Write-Host "`nSearching for other mail-related assemblies..."
-        try {
-          $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
-            Where-Object { $_.Length -gt 1000 -and $_.Name -ne "ASC.Mail.dll" } | 
-            Sort-Object Length -Descending
-          
-          if ($otherMailDlls) {
-            Write-Host "Other mail-related DLLs:"
-            foreach ($dll in $otherMailDlls) {
-              $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-              Write-Host "  📄 $relativePath ($($dll.Length) bytes)"
-            }
-          } else {
-            Write-Host "No other mail-related DLLs found"
-          }
-        } catch {
-          Write-Host "Error searching for other mail DLLs: $($_.Exception.Message)"
-        }
-        
-        # Show what actually got built (top 20 largest DLLs)
-        Write-Host "`nLargest DLLs in bin directories:"
-        try {
-          $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
-            Where-Object { $_.DirectoryName -like "*bin*" } | 
-            Sort-Object Length -Descending | 
-            Select-Object -First 20
-            
-          if ($binDlls) {
-            foreach ($dll in $binDlls) {
-              $relativePath = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-              $sizeKB = [math]::Round($dll.Length / 1024, 1)
-              Write-Host "  📄 $relativePath ($sizeKB KB)"
-            }
-          } else {
-            Write-Host "No DLLs found in bin directories"
-          }
-        } catch {
-          Write-Host "Error listing bin DLLs: $($_.Exception.Message)"
-        }
-        
-        # Report which build method worked
-        if ($env:SOLUTION_BUILD_SUCCESS -eq "true") {
-          Write-Host "`n🎯 Solution build was successful ($env:BUILD_CONFIG|$env:BUILD_PLATFORM)"
-        } elseif ($env:MAIL_BUILD_SUCCESS -eq "true") {
-          Write-Host "`n🎯 Individual mail module build was successful"
-        } else {
-          Write-Host "`n⚠️ No successful builds detected"
-        }
-        
-        # Final verification
-        if ($success -and $foundDlls.Count -gt 0) {
-          # Sort by size and pick the largest valid DLL
-          $sortedDlls = $foundDlls | Sort-Object Size -Descending
-          $primaryDll = $sortedDlls[0]
-          
-          Write-Host "`n✅ BUILD VERIFICATION SUCCESSFUL!"
-          Write-Host "Primary ASC.Mail.dll: $($primaryDll.Path)"
-          Write-Host "Size: $($primaryDll.Size) bytes"
-          
-          echo "success=true" >> $env:GITHUB_OUTPUT
-          echo "main_dll_path=$($primaryDll.Path)" >> $env:GITHUB_OUTPUT
-          echo "main_dll_dir=$(Split-Path $($primaryDll.Path) -Parent)" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Host "`n❌ NO VALID ASC.MAIL.DLL FOUND"
-          Write-Host "Build appears to have failed completely"
-          echo "success=false" >> $env:GITHUB_OUTPUT
-        }
-        
-    - name: Upload build artifacts (always for debugging)
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-debug-${{ github.run_number }}
-        path: |
-          **/bin/**/*.dll
-          **/*Mail*.dll
-          **/*Mail*.pdb
-          valid_configs.txt
-          common/ASC.Common/ASC.Common.csproj
-        retention-days: 2
-        
-    - name: Upload successful mail module build
-      if: steps.verify-build.outputs.success == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: mail-module-build
-        path: |
-          ${{ steps.verify-build.outputs.main_dll_dir }}/**/*Mail*
-        retention-days: 1
-
-  # Streamlined package creation
-  create-custom-package:
-    needs: [prepare-environment, build-mail-module]
-    runs-on: ubuntu-latest
-    if: always() && (needs.prepare-environment.result == 'success' || needs.prepare-environment.result == 'skipped')
-    
-    steps:
-    - name: Checkout code (for fallback)
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 1
-        
-    - name: Check job dependencies
-      run: |
-        echo "=== JOB DEPENDENCY STATUS ==="
-        echo "prepare-environment result: ${{ needs.prepare-environment.result }}"
-        echo "build-mail-module result: ${{ needs.build-mail-module.result }}"
-        echo "prepare-environment outputs:"
-        echo "  cache-hit-deb: ${{ needs.prepare-environment.outputs.cache-hit-deb }}"
-        echo "  cache-hit-extracted: ${{ needs.prepare-environment.outputs.cache-hit-extracted }}"
-        echo "  skip-build: ${{ needs.prepare-environment.outputs.skip-build }}"
-        
-    - name: Try to restore cached package
-      id: restore-cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          onlyoffice-communityserver.deb
-          official-package/
-        key: onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-${{ hashFiles('onlyoffice-communityserver.deb') }}
-        restore-keys: |
-          onlyoffice-extracted-v2-${{ env.ONLYOFFICE_VERSION }}-
-          onlyoffice-extracted-v2-
-          
-    - name: Download artifacts from preparation job (fallback)
-      if: steps.restore-cache.outputs.cache-hit != 'true'
-      uses: actions/download-artifact@v4
-      continue-on-error: true
-      with:
-        name: extracted-onlyoffice-package
-        
-    - name: Verify package availability
-      run: |
-        echo "🔍 Checking package availability..."
-        
-        if [ -d "official-package" ] && [ -f "onlyoffice-communityserver.deb" ]; then
-          echo "✅ Package available from cache/artifacts"
-          echo "📦 DEB size: $(ls -lh onlyoffice-communityserver.deb | awk '{print $5}')"
-          echo "📁 Extracted files: $(find official-package -type f | wc -l)"
-        else
-          echo "❌ Package not available, need to download and extract"
-          
-          # Emergency download if nothing is available
-          echo "🚨 Emergency package download..."
-          
-          # Install dependencies
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends wget dpkg-dev apt-transport-https ca-certificates
-          
-          # Add OnlyOffice APT repository
-          echo "🔧 Adding OnlyOffice repository..."
-          wget -qO - https://download.onlyoffice.com/GPG-KEY-ONLYOFFICE | sudo apt-key add -
-          echo "deb https://download.onlyoffice.com/repo/debian squeeze main" | sudo tee /etc/apt/sources.list.d/onlyoffice.list
-          
-          # Update package lists
-          sudo apt-get update -qq
-          
-          download_success=false
-          
-          # Try to download the package using apt-get download
-          echo "📦 Downloading OnlyOffice Community Server..."
-          
-          # Download to current directory instead of /tmp
-          if apt-get download onlyoffice-communityserver 2>/dev/null; then
-            deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-            if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              # Rename to standard name if needed
-              if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
-                mv "$deb_file" onlyoffice-communityserver.deb
-              fi
-              echo "✅ Emergency download successful!"
-              download_success=true
-            fi
-          fi
-          
-          # Fallback: Try alternative repository
-          if [ "$download_success" = false ]; then
-            echo "🔄 Trying alternative repository..."
-            echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
-            sudo apt-get update -qq
-            
-            if apt-get download onlyoffice-communityserver 2>/dev/null; then
-              deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
-              if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-                if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
-                  mv "$deb_file" onlyoffice-communityserver.deb
-                fi
-                echo "✅ Alternative repository download successful!"
-                download_success=true
-              fi
-            fi
-          fi
-          
-          if [ "$download_success" = false ]; then
-            echo "❌ Emergency download failed"
-            exit 1
-          fi
-          
-          # Extract the package
-          echo "📦 Emergency extraction..."
-          mkdir -p official-package
-          dpkg-deb -x onlyoffice-communityserver.deb official-package/
-          dpkg-deb -e onlyoffice-communityserver.deb official-package/DEBIAN/
-          
-          echo "✅ Emergency package preparation complete"
-        fi
-        
-    - name: Download build artifacts (conditional)
-      if: needs.build-mail-module.outputs.build-success == 'true'
-      uses: actions/download-artifact@v4
-      continue-on-error: true
-      with:
-        name: mail-module-build
-        path: build-output/
-        
-    - name: Fast package creation
-      run: |
-        echo "🚀 Fast package creation..."
-        
-        # Verify we have the source package
-        if [ ! -d "official-package" ]; then
-          echo "❌ official-package directory still not found!"
-          echo "Available directories:"
-          ls -la
-          exit 1
-        fi
-        
-        # Quick copy
-        echo "📋 Copying package structure..."
-        cp -r official-package custom-package
-        
-        echo "✅ Package structure copied"
-        echo "📊 Files in custom package: $(find custom-package -type f | wc -l)"
-        
-        # Replace mail module if we have a new one  
-        if [ -d "build-output/" ]; then
-          echo "📋 Searching for built mail assemblies..."
-          
-          # Find any ASC.Mail.dll files in the build output
-          mail_dlls=$(find build-output -name "ASC.Mail.dll" -type f 2>/dev/null || true)
-          
-          if [ -n "$mail_dlls" ]; then
-            echo "✅ Found compiled mail assemblies:"
-            echo "$mail_dlls"
-            
-            # Get the largest DLL file (most likely the main one)
-            main_dll=$(echo "$mail_dlls" | xargs ls -la | sort -k5 -nr | head -1 | awk '{print $NF}')
-            echo "📋 Using primary DLL: $main_dll"
-            
-            # Find all ASC.Mail.dll locations in the package and replace them
-            package_dlls=$(find custom-package -name "ASC.Mail.dll" -type f 2>/dev/null || true)
-            
-            if [ -n "$package_dlls" ]; then
-              echo "🔄 Replacing mail assemblies in package:"
-              while IFS= read -r dll_path; do
-                if [ -f "$dll_path" ]; then
-                  cp "$main_dll" "$dll_path"
-                  echo "  ✅ Updated: $dll_path"
-                fi
-              done <<< "$package_dlls"
-              
-              # Also copy any related files (PDB, XML, etc.)
-              main_dll_dir=$(dirname "$main_dll")
-              for ext in pdb xml exe.config; do
-                if [ -f "${main_dll_dir}/ASC.Mail.$ext" ]; then
-                  while IFS= read -r dll_path; do
-                    base_path="${dll_path%.dll}.$ext"
-                    base_dir=$(dirname "$dll_path")
-                    if [ -f "$base_path" ] || [ -d "$base_dir" ]; then
-                      cp "${main_dll_dir}/ASC.Mail.$ext" "$base_dir/" 2>/dev/null || true
-                      echo "  ✅ Updated: ASC.Mail.$ext in $base_dir"
-                    fi
-                  done <<< "$package_dlls"
-                fi
-              done
-              
-            else
-              echo "⚠️ No ASC.Mail.dll files found in package to replace"
-              # Create a new directory for the compiled assemblies
-              mkdir -p custom-package/opt/onlyoffice/CommunityServer/bin/
-              echo "$mail_dlls" | while read -r dll; do
-                if [ -f "$dll" ]; then
-                  cp "$dll" custom-package/opt/onlyoffice/CommunityServer/bin/
-                  echo "  ✅ Added: $(basename "$dll") to package"
-                fi
-              done
-            fi
-            
-          else
-            echo "ℹ️ No ASC.Mail.dll found in build output, using original mail module"
-            echo "Available files in build-output:"
-            find build-output -name "*.dll" -type f | head -10 || echo "No DLL files found"
-          fi
-        else
-          echo "ℹ️ No build output available, using original mail module"
-        fi
-        
-        # Comprehensive permission fix
-        if [ -d "custom-package/DEBIAN" ]; then
-          echo "🔧 Fixing DEBIAN script permissions..."
-          
-          # Make all maintainer scripts executable (must be >=0555 and <=0775)
-          for script in preinst postinst prerm postrm config templates; do
-            if [ -f "custom-package/DEBIAN/$script" ]; then
-              chmod 755 "custom-package/DEBIAN/$script"
-              echo "✅ Fixed $script: $(ls -la custom-package/DEBIAN/$script | awk '{print $1}')"
-            fi
-          done
-          
-          # Control and conffiles should be readable only
-          chmod 644 custom-package/DEBIAN/control 2>/dev/null || true
-          chmod 644 custom-package/DEBIAN/conffiles 2>/dev/null || true
-          chmod 644 custom-package/DEBIAN/md5sums 2>/dev/null || true
-          
-          echo "📋 Final DEBIAN permissions:"
-          ls -la custom-package/DEBIAN/ | head -5
-        fi
-        
-        # Quick metadata update
-        if [ -f "custom-package/DEBIAN/control" ]; then
-          sed -i "s/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/" custom-package/DEBIAN/control
-          sed -i "s/Version: \(.*\)/Version: \1-custom-${{ github.run_number }}/" custom-package/DEBIAN/control
-        fi
-        
-        # Validate package structure before building
-        echo "🔍 Validating package structure..."
-        
-        if [ ! -d "custom-package" ]; then
-          echo "❌ Custom package directory not found!"
-          exit 1
-        fi
-        
-        if [ ! -d "custom-package/DEBIAN" ]; then
-          echo "❌ DEBIAN directory not found!"
-          exit 1
-        fi
-        
-        if [ ! -f "custom-package/DEBIAN/control" ]; then
-          echo "❌ Control file not found!"
-          exit 1
-        fi
-        
-        echo "✅ Package structure validated"
-        echo "📊 Total files: $(find custom-package -type f | wc -l)"
-        echo "📦 Package size: $(du -sh custom-package | cut -f1)"
-        
-        # Build package with better error handling
-        echo "🔨 Building DEB package..."
-        
-        sudo chown -R root:root custom-package/
-        
-        if dpkg-deb --build custom-package onlyoffice-communityserver-custom.deb 2>&1; then
-          echo "✅ Package built successfully!"
-          
-          # Validate the final package
-          if [ -f "onlyoffice-communityserver-custom.deb" ] && [ -s "onlyoffice-communityserver-custom.deb" ]; then
-            echo "📦 Final package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
-            
-            # Quick package validation
-            echo "🔍 Validating package integrity..."
-            if dpkg-deb --info onlyoffice-communityserver-custom.deb >/dev/null 2>&1; then
-              echo "✅ Package validation passed!"
-            else
-              echo "⚠️ Package validation warnings (may still be usable)"
-            fi
-          else
-            echo "❌ Package file is missing or empty"
-            exit 1
-          fi
-        else
-          echo "❌ Package build failed!"
-          echo "📋 DEBIAN directory final state:"
-          ls -la custom-package/DEBIAN/
-          exit 1
-        fi
-        
-    - name: Upload custom package
-      uses: actions/upload-artifact@v4
-      with:
-        name: onlyoffice-custom-${{ github.run_number }}
-        path: onlyoffice-communityserver-custom.deb
-        retention-days: 7  # Reduced retention
-
-  # Optional Docker build
-  build-docker:
-    needs: create-custom-package
-    runs-on: ubuntu-latest
-    if: needs.create-custom-package.result == 'success' && github.event.inputs.skip_docker != 'true'
-    
-    steps:
-    - name: Download custom package
-      uses: actions/download-artifact@v4
-      with:
-        name: onlyoffice-custom-${{ github.run_number }}
-        
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Fast Docker build
-      run: |
-        # Streamlined Dockerfile
-        cat > Dockerfile << 'EOF'
-        FROM ubuntu:20.04
-        ENV DEBIAN_FRONTEND=noninteractive
-        
-        # Essential packages only
-        RUN apt-get update && apt-get install -y --no-install-recommends \
-            wget curl supervisor nginx && \
-            rm -rf /var/lib/apt/lists/*
-            
-        # Install custom package
-        COPY onlyoffice-communityserver-custom.deb /tmp/
-        RUN dpkg -i /tmp/onlyoffice-communityserver-custom.deb || apt-get install -f -y && \
-            rm /tmp/onlyoffice-communityserver-custom.deb
-        
-        LABEL version="${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}"
-        EXPOSE 80 443
-        CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]
-        EOF
-        
-        # Build with BuildKit for speed
-        DOCKER_BUILDKIT=1 docker build --progress=plain -t onlyoffice-custom-mail:latest .
-        
-        # Compress and save
         docker save onlyoffice-custom-mail:latest | gzip -1 > onlyoffice-custom-mail-image.tar.gz
         
         echo "📦 Image size: $(ls -lh onlyoffice-custom-mail-image.tar.gz | awk '{print $5}')"
