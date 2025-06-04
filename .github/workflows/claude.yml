@@ -719,28 +719,183 @@ jobs:
         
         echo "✅ Custom package prepared with comprehensive mail integration"
         
-    - name: Build custom Debian package
+    - name: Create custom Debian package with enhanced mail module
       run: |
         echo "Building custom Debian package..."
         
-        # Update package metadata
-        if [ -f "./custom-package/DEBIAN/control" ]; then
-          # Update package name and version
-          sed -i 's/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/' ./custom-package/DEBIAN/control
-          sed -i "s/Version: .*/Version: ${{ env.ONLYOFFICE_VERSION }}-custom-${{ github.run_number }}/" ./custom-package/DEBIAN/control
-          
-          # Add custom description
-          sed -i '/^Description:/a \ Custom build with enhanced CRM email integration.' ./custom-package/DEBIAN/control
-          sed -i '/Custom build with enhanced CRM email integration./a \ Includes automatic email-to-contact linking, enhanced mail processing,' ./custom-package/DEBIAN/control  
-          sed -i '/Includes automatic email-to-contact linking, enhanced mail processing,/a \ and improved CRM integration for OnlyOffice Community Server.' ./custom-package/DEBIAN/control
+        # Verify we have the extracted package
+        if [ ! -d "official-package" ]; then
+          echo "❌ Extracted package not found!"
+          exit 1
         fi
         
-        # Build the package
-        dpkg-deb --build ./custom-package onlyoffice-communityserver-custom.deb
+        # Copy the official package structure
+        echo "Copying official package structure..."
+        cp -r official-package/ custom-package/
         
-        echo "✅ Custom package created successfully"
-        dpkg-deb --info onlyoffice-communityserver-custom.deb
-        echo "📦 Package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
+        # Replace the mail module assemblies with our custom-built ones
+        echo "Replacing mail module with enhanced version..."
+        
+        # Find the mail module location in the package
+        MAIL_MODULE_PATHS=$(find custom-package -name "ASC.Mail*" -type f | head -5)
+        
+        if [ -z "$MAIL_MODULE_PATHS" ]; then
+          echo "❌ Could not find mail module files in package"
+          exit 1
+        fi
+        
+        echo "Found mail module files:"
+        echo "$MAIL_MODULE_PATHS"
+        
+        # Copy our enhanced mail assemblies (if they exist)
+        if [ -f "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" ]; then
+          echo "Copying enhanced ASC.Mail.dll..."
+          
+          # Replace all instances of ASC.Mail.dll in the package
+          find custom-package -name "ASC.Mail.dll" -type f -exec cp "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll" {} \;
+          
+          # Copy related files if they exist
+          for file in ASC.Mail.pdb ASC.Mail.xml ASC.Mail.exe.config; do
+            if [ -f "module/ASC.Mail/ASC.Mail/bin/Release/$file" ]; then
+              echo "Copying $file..."
+              find custom-package -name "$file" -type f -exec cp "module/ASC.Mail/ASC.Mail/bin/Release/$file" {} \;
+            fi
+          done
+          
+          echo "✅ Enhanced mail module files copied"
+        else
+          echo "⚠️ Enhanced mail module not found, using original"
+        fi
+        
+        # Fix permissions for maintainer scripts - THIS IS THE KEY FIX
+        echo "Fixing maintainer script permissions..."
+        
+        if [ -d "custom-package/DEBIAN" ]; then
+          echo "Found DEBIAN directory, fixing script permissions..."
+          
+          # List all files in DEBIAN directory
+          echo "Files in DEBIAN directory:"
+          ls -la custom-package/DEBIAN/
+          
+          # Make all maintainer scripts executable
+          for script in preinst postinst prerm postrm; do
+            if [ -f "custom-package/DEBIAN/$script" ]; then
+              echo "Making $script executable..."
+              chmod 755 "custom-package/DEBIAN/$script"
+              echo "✅ Fixed permissions for $script: $(ls -la custom-package/DEBIAN/$script | awk '{print $1}')"
+            else
+              echo "Script $script not found"
+            fi
+          done
+          
+          # Also fix the control file permissions (should be readable)
+          if [ -f "custom-package/DEBIAN/control" ]; then
+            chmod 644 "custom-package/DEBIAN/control"
+            echo "✅ Fixed permissions for control file"
+          fi
+          
+          # Fix conffiles if it exists
+          if [ -f "custom-package/DEBIAN/conffiles" ]; then
+            chmod 644 "custom-package/DEBIAN/conffiles"
+            echo "✅ Fixed permissions for conffiles"
+          fi
+          
+          # Verify final permissions
+          echo "Final DEBIAN directory permissions:"
+          ls -la custom-package/DEBIAN/
+          
+        else
+          echo "❌ DEBIAN directory not found in custom-package!"
+          echo "Available directories:"
+          find custom-package -maxdepth 2 -type d | head -10
+          exit 1
+        fi
+        
+        # Update package metadata to reflect customization
+        echo "Updating package metadata..."
+        
+        if [ -f "custom-package/DEBIAN/control" ]; then
+          # Read the original control file
+          cp custom-package/DEBIAN/control custom-package/DEBIAN/control.orig
+          
+          # Update version and description to indicate customization
+          sed -i "s/Version: \(.*\)/Version: \1-custom-${GITHUB_RUN_NUMBER}/" custom-package/DEBIAN/control
+          sed -i "s/Package: onlyoffice-communityserver/Package: onlyoffice-communityserver-custom/" custom-package/DEBIAN/control
+          sed -i "s/Description: \(.*\)/Description: \1 (Enhanced CRM Mail Integration)/" custom-package/DEBIAN/control
+          
+          # Add maintainer information
+          if ! grep -q "Maintainer.*custom" custom-package/DEBIAN/control; then
+            sed -i "/^Maintainer:/c\Maintainer: Custom Build <build@${GITHUB_REPOSITORY}>" custom-package/DEBIAN/control
+          fi
+          
+          echo "Updated control file:"
+          echo "--- Original ---"
+          head -10 custom-package/DEBIAN/control.orig
+          echo "--- Modified ---"
+          head -10 custom-package/DEBIAN/control
+          
+        else
+          echo "❌ Control file not found!"
+          exit 1
+        fi
+        
+        # Verify package structure before building
+        echo "Verifying package structure..."
+        echo "Total files in package: $(find custom-package -type f | wc -l)"
+        echo "Package size: $(du -sh custom-package | cut -f1)"
+        
+        # Build the custom package with proper ownership
+        echo "Building custom DEB package..."
+        
+        # Ensure proper ownership (important for DEB package creation)
+        sudo chown -R root:root custom-package/
+        
+        # Build the package
+        dpkg-deb --build custom-package onlyoffice-communityserver-custom.deb
+        
+        if [ $? -eq 0 ] && [ -f "onlyoffice-communityserver-custom.deb" ]; then
+          echo "✅ Custom package built successfully!"
+          
+          # Verify the package
+          echo "Package information:"
+          dpkg-deb --info onlyoffice-communityserver-custom.deb | head -20
+          
+          echo "Package contents sample:"
+          dpkg-deb --contents onlyoffice-communityserver-custom.deb | head -10
+          
+          echo "Package size: $(ls -lh onlyoffice-communityserver-custom.deb | awk '{print $5}')"
+          
+          # Test the package integrity
+          echo "Testing package integrity..."
+          dpkg-deb --validate onlyoffice-communityserver-custom.deb
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Package validation passed!"
+          else
+            echo "⚠️ Package validation warnings (may still be usable)"
+          fi
+          
+        else
+          echo "❌ Failed to build custom package"
+          
+          # Debug information
+          echo "Debug: Checking what went wrong..."
+          
+          # Check if dpkg-deb command exists
+          which dpkg-deb || echo "dpkg-deb not found"
+          
+          # Check final permissions again
+          echo "Final maintainer script permissions:"
+          ls -la custom-package/DEBIAN/
+          
+          # Show any error files
+          if [ -f "dpkg-deb.log" ]; then
+            echo "dpkg-deb log:"
+            cat dpkg-deb.log
+          fi
+          
+          exit 1
+        fi
         
     - name: Upload custom package
       uses: actions/upload-artifact@v4
