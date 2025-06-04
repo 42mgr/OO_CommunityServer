@@ -50,6 +50,7 @@ jobs:
         
         OUTPUT_FILE=""
         URL=""
+        QUIET=false
         
         # Parse wget arguments
         while [[ $# -gt 0 ]]; do
@@ -62,6 +63,10 @@ jobs:
               OUTPUT_FILE="$2"
               shift 2
               ;;
+            -q|--quiet)
+              QUIET=true
+              shift
+              ;;
             http*|https*)
               URL="$1"
               shift
@@ -72,11 +77,29 @@ jobs:
           esac
         done
         
-        # Use curl instead of wget
+        # Use curl instead of wget with proper options
+        CURL_OPTS="-L --fail --connect-timeout 30 --max-time 300"
+        if [ "$QUIET" = true ]; then
+          CURL_OPTS="$CURL_OPTS -s"
+        fi
+        
         if [ -n "$OUTPUT_FILE" ] && [ -n "$URL" ]; then
-          curl -L -o "$OUTPUT_FILE" "$URL"
+          echo "Downloading $URL to $OUTPUT_FILE..."
+          curl $CURL_OPTS -o "$OUTPUT_FILE" "$URL"
+          RESULT=$?
+          if [ $RESULT -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+            echo "Download completed. File size: $(wc -c < "$OUTPUT_FILE") bytes"
+            # Check if it's an HTML error page
+            if head -c 100 "$OUTPUT_FILE" | grep -q "<html\|<HTML\|<!DOCTYPE"; then
+              echo "WARNING: Downloaded file appears to be HTML (likely an error page)"
+              head -c 500 "$OUTPUT_FILE"
+              rm -f "$OUTPUT_FILE"
+              exit 1
+            fi
+          fi
+          exit $RESULT
         elif [ -n "$URL" ]; then
-          curl -L -O "$URL"
+          curl $CURL_OPTS -O "$URL"
         else
           echo "Usage: wget -O output_file URL"
           exit 1
@@ -87,17 +110,30 @@ jobs:
           export PATH="$(pwd):$PATH"
         fi
         
-        # Create a mock dpkg-deb function for Windows
+        # Create a better mock dpkg-deb function for Windows
         cat > dpkg-deb << 'EOF'
         #!/bin/bash
         # Mock dpkg-deb for Windows compatibility
         if [ "$1" = "--info" ]; then
           if [ -f "$2" ] && [ -s "$2" ]; then
-            echo "Package: onlyoffice-communityserver"
-            echo "Version: latest"
-            echo "Architecture: amd64"
-            echo "Description: OnlyOffice Community Server"
-            exit 0
+            # Check if it's actually a debian package or at least an archive
+            if file "$2" 2>/dev/null | grep -q -i "debian\|archive\|compressed"; then
+              echo "Package: onlyoffice-communityserver"
+              echo "Version: latest"
+              echo "Architecture: amd64" 
+              echo "Description: OnlyOffice Community Server"
+              exit 0
+            elif head -c 100 "$2" | grep -q "<html\|<HTML\|<!DOCTYPE"; then
+              echo "dpkg-deb: error: file '$2' is not a debian package (appears to be HTML)"
+              exit 1
+            else
+              # For any other binary file, assume it's valid (best we can do on Windows)
+              echo "Package: onlyoffice-communityserver"
+              echo "Version: latest"
+              echo "Architecture: amd64"
+              echo "Description: OnlyOffice Community Server"
+              exit 0
+            fi
           else
             echo "dpkg-deb: error: failed to read archive '$2'"
             exit 1
@@ -108,6 +144,12 @@ jobs:
         EOF
         
         chmod +x dpkg-deb
+        
+        # Debug: Check what tools we have available
+        echo "Available tools:"
+        echo "- curl: $(which curl || echo "not found")"
+        echo "- file: $(which file || echo "not found")"
+        echo "- wget: $(which wget)"
         
         # Make the script executable and run it
         if [ -f ".github/build-scripts/download-deb.sh" ]; then
@@ -121,14 +163,21 @@ jobs:
             echo "✅ Successfully downloaded OnlyOffice package using custom script"
             file_size=$(wc -c < "onlyoffice-communityserver.deb" 2>/dev/null || echo "unknown")
             echo "📦 Package size: $file_size bytes"
+            
+            # Additional verification
+            echo "File type check:"
+            file onlyoffice-communityserver.deb 2>/dev/null || echo "file command not available"
+            echo "First 100 bytes:"
+            head -c 100 onlyoffice-communityserver.deb | od -c || echo "od command not available"
           else
             echo "❌ Custom script failed to download package"
             echo "Checking what files were created..."
             ls -la *.deb 2>/dev/null || echo "No .deb files found"
             ls -la minimal-deb* 2>/dev/null || echo "No minimal-deb files found"
             
-            # Try to see if any package was created but with different name
-            find . -name "*.deb" -o -name "*onlyoffice*" 2>/dev/null || echo "No package files found"
+            # Show any files that might have been downloaded
+            echo "All files in current directory:"
+            ls -la
             exit 1
           fi
         else
