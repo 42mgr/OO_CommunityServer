@@ -1,4 +1,60 @@
-name: Build Custom OnlyOffice with Mail Module Changes
+- name: Try solution-based build approach first
+      shell: pwsh
+      run: |
+        Write-Host "Attempting solution-based build approach..."
+        
+        # Find all solution files
+        $solutionFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse
+        
+        if ($solutionFiles) {
+          Write-Host "Found $($solutionFiles.Count) solution files:"
+          foreach ($sln in $solutionFiles) {
+            Write-Host "  - $sln"
+          }
+          
+          # Try building the main solution that contains the mail module
+          $mainSolution = $solutionFiles | Where-Object { $_ -like "*Studio*" -or $_ -like "*Mail*" -or $_ -like "*CommunityServer*" } | Select-Object -First 1
+          
+          if (-not $mainSolution) {
+            $mainSolution = $solutionFiles[0]
+          }
+          
+          Write-Host "`n=== Building main solution: $mainSolution ==="
+          
+          try {
+            # Build the solution with comprehensive settings
+            Write-Host "Building solution with comprehensive configuration..."
+            msbuild $mainSolution `
+              /p:Configuration=Release `
+              /p:Platform="Any CPU" `
+              /p:TreatWarningsAsErrors=false `
+              /p:WarningLevel=1 `
+              /p:ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch=None `
+              /p:AutoGenerateBindingRedirects=true `
+              /p:BuildProjectReferences=true `
+              /verbosity:normal `
+              /maxcpucount `
+              /nologo
+              
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Successfully built solution: $mainSolution"
+            } else {
+              Write-Host "❌ Failed to build solution: $mainSolution (exit code: $LASTEXITCODE)"
+            }
+          } catch {
+            Write-Host "❌ Exception building solution: $($_.Exception.Message)"
+          }
+          
+          # Check if our target was built
+          if (Test-Path "module/ASC.Mail/ASC.Mail/bin/Release/ASC.Mail.dll") {
+            Write-Host "`n🎉 SUCCESS: ASC.Mail.dll was built via solution!"
+            Get-ChildItem "module/ASC.Mail/ASC.Mail/bin/Release/" | Select-Object Name, Length, LastWriteTime
+          } else {
+            Write-Host "`n⚠️ ASC.Mail.dll not found after solution build"
+            
+            # Check what was actually built
+            Write-Host "Checking what assemblies were built..."
+            $builtDlls = Gename: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   workflow_dispatch:
@@ -115,10 +171,10 @@ jobs:
       with:
         name: extracted-onlyoffice-package
         
-    - name: Fix ALL project configurations comprehensively
+    - name: Fix ALL project references and configurations
       shell: pwsh
       run: |
-        Write-Host "Fixing ALL MSBuild project configurations comprehensively..."
+        Write-Host "Fixing ALL project references and configurations..."
         
         # Find ALL .csproj files in the entire repository
         $allProjects = Get-ChildItem -Path "." -Name "*.csproj" -Recurse
@@ -132,7 +188,7 @@ jobs:
             $content = Get-Content $proj -Raw
             $modified = $false
             
-            # Fix missing Release|Any CPU configuration
+            # Fix 1: Add missing Release|Any CPU configuration
             if ($content -notmatch 'Release.*Any CPU') {
               Write-Host "  Adding Release|Any CPU configuration"
               
@@ -149,7 +205,7 @@ jobs:
               $modified = $true
             }
             
-            # Fix missing Debug|Any CPU configuration
+            # Fix 2: Add missing Debug|Any CPU configuration
             if ($content -notmatch 'Debug.*Any CPU') {
               Write-Host "  Adding Debug|Any CPU configuration"
               
@@ -167,25 +223,16 @@ jobs:
               $modified = $true
             }
             
-            # Ensure proper Platform configuration exists
-            if ($content -notmatch '<Platform.*>AnyCPU</Platform>') {
-              Write-Host "  Adding Platform configuration"
-              
-              $platformXml = "  <PropertyGroup>`n    <Platform Condition=`"`$(Platform) == ''`">AnyCPU</Platform>`n  </PropertyGroup>"
-              $content = $content -replace '</Project>', ($platformXml + "`n</Project>")
-              $modified = $true
-            }
-            
             if ($modified) {
               Set-Content -Path $proj -Value $content -Encoding UTF8
-              Write-Host "  ✅ Fixed $proj"
+              Write-Host "  ✅ Fixed configurations for $proj"
             } else {
-              Write-Host "  ✅ $proj already properly configured"
+              Write-Host "  ✅ $proj already has proper configurations"
             }
           }
         }
         
-        # Create comprehensive Directory.Build.props
+        # Create comprehensive Directory.Build.props with global project reference settings
         $buildPropsXml = @"
         <Project>
           <PropertyGroup>
@@ -194,6 +241,11 @@ jobs:
             <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
             <WarningLevel>1</WarningLevel>
             <OutputPath Condition="`$(OutputPath) == ''">bin\`$(Configuration)\</OutputPath>
+            
+            <!-- Fix for project reference resolution -->
+            <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
+            <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+            <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
           </PropertyGroup>
           
           <!-- Default configurations for all projects -->
@@ -201,6 +253,7 @@ jobs:
             <OutputPath>bin\Release\</OutputPath>
             <DebugType>pdbonly</DebugType>
             <Optimize>true</Optimize>
+            <PlatformTarget>AnyCPU</PlatformTarget>
           </PropertyGroup>
           
           <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Debug|AnyCPU'">
@@ -208,6 +261,7 @@ jobs:
             <DebugSymbols>true</DebugSymbols>
             <DebugType>full</DebugType>
             <Optimize>false</Optimize>
+            <PlatformTarget>AnyCPU</PlatformTarget>
           </PropertyGroup>
         </Project>
         "@
@@ -215,97 +269,74 @@ jobs:
         Set-Content -Path "Directory.Build.props" -Value $buildPropsXml -Encoding UTF8
         Write-Host "✅ Created comprehensive Directory.Build.props"
         
-    - name: Restore NuGet packages (simplified)
+    - name: Restore NuGet packages comprehensively
       shell: pwsh
       run: |
-        Write-Host "Restoring NuGet packages..."
+        Write-Host "Restoring NuGet packages comprehensively..."
         
-        # Ensure we're in the workspace directory
+        # Ensure we're in the right directory
         Set-Location $env:GITHUB_WORKSPACE
-        Write-Host "Working from: $(Get-Location)"
+        Write-Host "Working directory: $(Get-Location)"
         
-        # Method 1: Restore solution files (most reliable)
-        Write-Host "`n=== Restoring Solution Files ==="
-        if (Test-Path "*.sln") {
-          Get-ChildItem "*.sln" | ForEach-Object {
-            Write-Host "Restoring solution: $($_.Name)"
-            try {
-              nuget restore $_.FullName -Verbosity quiet
-              Write-Host "✅ $($_.Name) restored successfully"
-            } catch {
-              Write-Host "⚠️ Failed to restore $($_.Name): $($_.Exception.Message)"
-            }
-          }
-        }
-        
-        # Find solution files recursively if none in root
-        $allSolutions = Get-ChildItem -Path "." -Filter "*.sln" -Recurse -ErrorAction SilentlyContinue
-        if ($allSolutions) {
-          Write-Host "Found $($allSolutions.Count) solution files total"
-          foreach ($sln in $allSolutions) {
-            if (-not $sln.FullName.Contains("packages")) {  # Skip solutions in packages folder
-              Write-Host "Restoring: $($sln.FullName)"
+        # First, try to restore any solution files
+        try {
+          $slnFiles = Get-ChildItem -Path "." -Name "*.sln" -Recurse -ErrorAction Stop
+          
+          if ($slnFiles) {
+            foreach ($sln in $slnFiles) {
+              Write-Host "Restoring packages for solution: $sln"
               try {
-                nuget restore $sln.FullName -Verbosity quiet
+                nuget restore $sln -Verbosity normal -NonInteractive -Force
+                Write-Host "✅ Successfully restored $sln"
               } catch {
-                Write-Host "⚠️ Failed: $($_.Exception.Message)"
+                Write-Host "⚠️ Warning: Failed to restore $sln - $($_.Exception.Message)"
               }
             }
+          } else {
+            Write-Host "No solution files found"
           }
+        } catch {
+          Write-Host "⚠️ Error searching for solution files: $($_.Exception.Message)"
         }
         
-        # Method 2: Restore individual packages.config files
-        Write-Host "`n=== Restoring Individual Package Configs ==="
-        $packageConfigs = Get-ChildItem -Path "." -Filter "packages.config" -Recurse -ErrorAction SilentlyContinue
-        
-        if ($packageConfigs) {
-          Write-Host "Found $($packageConfigs.Count) packages.config files"
+        # Restore packages for individual projects that have packages.config
+        try {
+          $packagesConfigs = Get-ChildItem -Path "." -Name "packages.config" -Recurse -ErrorAction SilentlyContinue
           
-          foreach ($config in $packageConfigs) {
-            if (-not $config.FullName.Contains("packages\")) {  # Skip configs in packages folder
-              $projectDir = $config.Directory.FullName
-              $projectName = $config.Directory.Name
-              
-              Write-Host "Restoring packages for project: $projectName"
+          if ($packagesConfigs) {
+            Write-Host "Found $($packagesConfigs.Count) packages.config files"
+            
+            foreach ($pkgConfig in $packagesConfigs) {
+              $projectDir = Split-Path $pkgConfig -Parent
+              $fullProjectDir = Resolve-Path $projectDir
+              Write-Host "Restoring packages for: $fullProjectDir"
               
               try {
-                # Calculate relative path to packages directory
-                $relativePath = [System.IO.Path]::GetRelativePath($projectDir, "$env:GITHUB_WORKSPACE\packages")
+                Push-Location $fullProjectDir
                 
-                Push-Location $projectDir
-                nuget restore packages.config -PackagesDirectory $relativePath -Verbosity quiet
-                Write-Host "✅ $projectName packages restored"
+                # Determine the correct packages directory relative path
+                $depth = ($fullProjectDir.ToString() -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count - ($env:GITHUB_WORKSPACE -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count
+                $packagesDir = "../" * $depth + "packages"
+                
+                Write-Host "  Using packages directory: $packagesDir"
+                nuget restore packages.config -PackagesDirectory $packagesDir -Verbosity normal -Force
+                Write-Host "  ✅ Successfully restored packages for $($projectDir)"
+                
                 Pop-Location
               } catch {
-                Write-Host "⚠️ Failed to restore $projectName packages: $($_.Exception.Message)"
-                # Ensure we pop location even on error
-                try { Pop-Location } catch { }
+                Write-Host "  ⚠️ Warning: Failed to restore packages for $projectDir - $($_.Exception.Message)"
+                Pop-Location
               }
             }
+          } else {
+            Write-Host "No packages.config files found"
           }
-        } else {
-          Write-Host "No packages.config files found"
+        } catch {
+          Write-Host "⚠️ Error searching for packages.config files: $($_.Exception.Message)"
         }
         
-        # Method 3: Try restoring mail module specifically
-        Write-Host "`n=== Restoring Mail Module Specifically ==="
-        $mailPackageConfig = "module\ASC.Mail\ASC.Mail\packages.config"
-        if (Test-Path $mailPackageConfig) {
-          Write-Host "Restoring mail module packages..."
-          try {
-            Set-Location "module\ASC.Mail\ASC.Mail"
-            nuget restore packages.config -PackagesDirectory "..\..\..\packages" -Verbosity normal
-            Write-Host "✅ Mail module packages restored"
-            Set-Location $env:GITHUB_WORKSPACE
-          } catch {
-            Write-Host "⚠️ Failed to restore mail module packages: $($_.Exception.Message)"
-            Set-Location $env:GITHUB_WORKSPACE
-          }
-        } else {
-          Write-Host "Mail module packages.config not found at expected location"
-        }
-        
-        Write-Host "`n✅ NuGet restore completed"
+        # Final check - make sure we're back in the workspace
+        Set-Location $env:GITHUB_WORKSPACE
         
     - name: Build dependencies first, then mail module
       shell: pwsh
