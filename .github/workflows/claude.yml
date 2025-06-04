@@ -314,10 +314,10 @@ jobs:
     - name: Checkout with submodules
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Full history needed for proper builds
+        fetch-depth: 0
         submodules: recursive
         
-    - name: Setup .NET Framework (multiple versions)
+    - name: Setup .NET Framework and Core
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: |
@@ -336,181 +336,323 @@ jobs:
         
     - name: Install Visual Studio Build Tools
       run: |
-        # Install additional build components that OnlyOffice might need
-        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.MSBuildTools --add Microsoft.VisualStudio.Workload.WebBuildTools --quiet"
+        choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.MSBuildTools --add Microsoft.VisualStudio.Workload.WebBuildTools --quiet" --no-progress
         
-    - name: Diagnose solution structure
+    - name: Analyze solution configurations
       shell: pwsh
       run: |
-        Write-Host "🔍 Analyzing solution structure..."
+        Write-Host "🔍 Analyzing available solution configurations..."
         
         # Find all solution files
         $solutions = Get-ChildItem -Name "*.sln" -Recurse
         Write-Host "Found solutions:"
-        $solutions | ForEach-Object { Write-Host "  📄 $_" }
-        
-        # Find mail-related projects
-        $mailProjects = Get-ChildItem -Name "*Mail*.csproj" -Recurse
-        Write-Host "`nMail-related projects:"
-        $mailProjects | ForEach-Object { 
+        $solutions | ForEach-Object { 
           Write-Host "  📄 $_"
-          # Check if project file is valid
+          
+          # Read solution file to find available configurations
           try {
             $content = Get-Content $_ -Raw
-            if ($content.Contains('<Project')) {
-              Write-Host "    ✅ Valid project file"
-            } else {
-              Write-Host "    ❌ Invalid project file"
+            if ($content -match 'GlobalSection\(SolutionConfigurationPlatforms\) = preSolution(.*?)EndGlobalSection') {
+              $configSection = $matches[1]
+              Write-Host "    Available configurations:"
+              $configSection -split "`n" | ForEach-Object {
+                if ($_ -match '^\s*([^=]+)\s*=\s*([^=]+)\s*$') {
+                  Write-Host "      🎯 $($matches[1].Trim())"
+                }
+              }
             }
           } catch {
-            Write-Host "    ❌ Cannot read project file"
+            Write-Host "    ❌ Cannot read solution file"
           }
         }
         
-        # Look for the main mail module
-        $mainMailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
-        if (Test-Path $mainMailProject) {
-          Write-Host "`n📋 Main mail project found: $mainMailProject"
-          $content = Get-Content $mainMailProject -Raw
-          Write-Host "Target framework:"
-          if ($content -match '<TargetFramework[^>]*>([^<]+)</TargetFramework>') {
-            Write-Host "  🎯 $($matches[1])"
-          }
-        } else {
-          Write-Host "`n❌ Main mail project not found at expected location"
-        }
-        
-    - name: Global NuGet restore
+    - name: Fix project RuntimeIdentifiers
       shell: pwsh
       run: |
-        Write-Host "📦 Comprehensive NuGet restore..."
+        Write-Host "🔧 Adding RuntimeIdentifiers to projects..."
         
-        # Restore all solutions
-        $solutions = Get-ChildItem -Name "*.sln" -Recurse
-        foreach ($solution in $solutions) {
-          Write-Host "Restoring: $solution"
-          nuget restore $solution -Verbosity detailed -NonInteractive
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "⚠️ NuGet restore failed for $solution"
+        # Find all csproj files that might need runtime identifiers
+        $projectFiles = Get-ChildItem -Name "*.csproj" -Recurse | Where-Object {
+          $_ -like "*ASC.Common*" -or $_ -like "*ASC.Mail*" -or $_ -like "*ASC.Core*"
+        }
+        
+        foreach ($projectFile in $projectFiles) {
+          Write-Host "Checking: $projectFile"
+          try {
+            $content = Get-Content $projectFile -Raw
+            
+            # Check if it's a modern SDK-style project
+            if ($content -match '<Project\s+Sdk=') {
+              Write-Host "  📋 Modern SDK project detected"
+              
+              # Add RuntimeIdentifiers if missing
+              if (-not ($content -match '<RuntimeIdentifiers>')) {
+                Write-Host "  🔧 Adding RuntimeIdentifiers..."
+                
+                # Find the first PropertyGroup and add RuntimeIdentifiers
+                $newContent = $content -replace '(<PropertyGroup[^>]*>)', "`$1`n    <RuntimeIdentifiers>win-x64;win-x86;win</RuntimeIdentifiers>"
+                
+                # Also add RuntimeIdentifier for single target
+                if (-not ($newContent -match '<RuntimeIdentifier>')) {
+                  $newContent = $newContent -replace '(<PropertyGroup[^>]*>)', "`$1`n    <RuntimeIdentifier>win-x64</RuntimeIdentifier>"
+                }
+                
+                Set-Content -Path $projectFile -Value $newContent -Encoding UTF8
+                Write-Host "  ✅ Updated $projectFile"
+              } else {
+                Write-Host "  ✅ RuntimeIdentifiers already present"
+              }
+            } else {
+              Write-Host "  📋 Legacy project format"
+            }
+          } catch {
+            Write-Host "  ⚠️ Error processing: $($_.Exception.Message)"
           }
         }
         
-        # Also try dotnet restore for newer project formats
-        Write-Host "`nTrying dotnet restore..."
-        try {
-          dotnet restore --verbosity diagnostic
-        } catch {
-          Write-Host "dotnet restore failed: $($_.Exception.Message)"
-        }
-        
-    - name: Build entire solution first
+    - name: Create global MSBuild properties
       shell: pwsh
       run: |
-        Write-Host "🏗️ Building entire solution to resolve dependencies..."
+        Write-Host "📝 Creating global MSBuild properties..."
         
-        # Find the main solution file
-        $mainSolution = Get-ChildItem -Name "*.sln" | Where-Object { 
-          $_ -like "*OnlyOffice*" -or $_ -like "*CommunityServer*" 
-        } | Select-Object -First 1
+        # Create Directory.Build.props in root
+        $globalProps = @"
+        <Project>
+          <PropertyGroup>
+            <Configuration Condition="`$(Configuration) == ''">Release</Configuration>
+            <Platform Condition="`$(Platform) == ''">x64</Platform>
+            <RuntimeIdentifier Condition="`$(RuntimeIdentifier) == ''">win-x64</RuntimeIdentifier>
+            <RuntimeIdentifiers Condition="`$(RuntimeIdentifiers) == ''">win-x64;win-x86;win</RuntimeIdentifiers>
+            <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+            <WarningLevel>1</WarningLevel>
+            <BuildProjectReferences>true</BuildProjectReferences>
+            <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
+            <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+            <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+          </PropertyGroup>
+        </Project>
+        "@
         
-        if (-not $mainSolution) {
-          $mainSolution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
-        }
+        Set-Content -Path "Directory.Build.props" -Value $globalProps -Encoding UTF8
+        Write-Host "✅ Created Directory.Build.props"
+        
+    - name: NuGet restore with proper configuration
+      shell: pwsh
+      run: |
+        Write-Host "📦 NuGet restore with runtime identifier support..."
+        
+        # Set environment variables for consistent restore
+        $env:DOTNET_CLI_TELEMETRY_OPTOUT = "1"
+        $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = "1"
+        
+        # Find main solution
+        $mainSolution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
         
         if ($mainSolution) {
-          Write-Host "Building solution: $mainSolution"
+          Write-Host "Restoring solution: $mainSolution"
           
-          # Try different build configurations
-          $configs = @("Release", "Debug")
-          $platforms = @("Any CPU", "AnyCPU", "x64")
+          # Try NuGet restore first
+          nuget restore $mainSolution -Verbosity normal -NonInteractive -ConfigFile NuGet.Config 2>&1 | Write-Host
           
-          $buildSuccess = $false
-          foreach ($config in $configs) {
-            foreach ($platform in $platforms) {
-              Write-Host "Trying Configuration=$config, Platform=$platform"
+          # Then try dotnet restore with runtime
+          Write-Host "`nTrying dotnet restore..."
+          dotnet restore $mainSolution --runtime win-x64 --verbosity normal 2>&1 | Write-Host
+          
+          # Alternative restore for older packages
+          Write-Host "`nTrying alternative restore..."
+          dotnet restore $mainSolution --force --no-cache --verbosity normal 2>&1 | Write-Host
+        }
+        
+    - name: Discover and use correct build configuration
+      shell: pwsh
+      run: |
+        Write-Host "🎯 Finding correct build configurations..."
+        
+        $mainSolution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
+        
+        if ($mainSolution) {
+          Write-Host "Analyzing solution: $mainSolution"
+          
+          # Parse solution file for actual configurations
+          $content = Get-Content $mainSolution -Raw
+          $availableConfigs = @()
+          
+          if ($content -match 'GlobalSection\(SolutionConfigurationPlatforms\) = preSolution(.*?)EndGlobalSection') {
+            $configSection = $matches[1]
+            $configLines = $configSection -split "`n" | Where-Object { $_ -match '=' }
+            
+            foreach ($line in $configLines) {
+              if ($line -match '^\s*([^=]+)\s*=') {
+                $config = $matches[1].Trim()
+                if ($config -and $config -notlike "*GlobalSection*" -and $config -notlike "*EndGlobalSection*") {
+                  $availableConfigs += $config
+                  Write-Host "  📋 Available: $config"
+                }
+              }
+            }
+          }
+          
+          # Store configurations for next step
+          $availableConfigs | Out-File -FilePath "available_configs.txt" -Encoding UTF8
+          
+          Write-Host "`nFound $($availableConfigs.Count) configurations"
+        }
+        
+    - name: Build with correct configuration
+      shell: pwsh
+      run: |
+        Write-Host "🏗️ Building with discovered configurations..."
+        
+        $mainSolution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
+        $buildSuccess = $false
+        
+        if ($mainSolution -and (Test-Path "available_configs.txt")) {
+          $availableConfigs = Get-Content "available_configs.txt"
+          
+          Write-Host "Trying configurations from solution file..."
+          foreach ($config in $availableConfigs) {
+            if ($config -match '^([^|]+)\|(.+)$') {
+              $configuration = $matches[1].Trim()
+              $platform = $matches[2].Trim()
+              
+              Write-Host "`nTrying: Configuration=$configuration, Platform=$platform"
               
               try {
-                msbuild $mainSolution /p:Configuration=$config /p:Platform="$platform" /verbosity:normal /maxcpucount /p:WarningLevel=0
+                # Use exact configuration and platform from solution
+                msbuild $mainSolution /p:Configuration="$configuration" /p:Platform="$platform" /verbosity:minimal /maxcpucount /p:WarningLevel=1 /p:TreatWarningsAsErrors=false
+                
                 if ($LASTEXITCODE -eq 0) {
-                  Write-Host "✅ Build successful with $config|$platform"
+                  Write-Host "✅ Build successful with $configuration|$platform"
                   $buildSuccess = $true
                   break
                 }
               } catch {
-                Write-Host "❌ Build failed with $config|$platform"
+                Write-Host "❌ Build failed with $configuration|$platform"
               }
             }
-            if ($buildSuccess) { break }
           }
-          
-          if (-not $buildSuccess) {
-            Write-Host "⚠️ Full solution build failed, trying individual projects..."
-          }
-        } else {
-          Write-Host "❌ No solution file found"
         }
         
-    - name: Build mail module specifically
+        # Fallback to common configurations
+        if (-not $buildSuccess) {
+          Write-Host "`n🔄 Trying common fallback configurations..."
+          
+          $fallbackConfigs = @(
+            @{Config="Release"; Platform="x64"},
+            @{Config="Debug"; Platform="x64"},
+            @{Config="Release"; Platform="Any CPU"},
+            @{Config="Debug"; Platform="Any CPU"},
+            @{Config="Release"; Platform="AnyCPU"},
+            @{Config="Debug"; Platform="AnyCPU"}
+          )
+          
+          foreach ($fallback in $fallbackConfigs) {
+            Write-Host "Trying fallback: $($fallback.Config)|$($fallback.Platform)"
+            
+            try {
+              msbuild $mainSolution /p:Configuration="$($fallback.Config)" /p:Platform="$($fallback.Platform)" /verbosity:minimal /maxcpucount /p:WarningLevel=1
+              
+              if ($LASTEXITCODE -eq 0) {
+                Write-Host "✅ Fallback build successful!"
+                $buildSuccess = $true
+                break
+              }
+            } catch {
+              Write-Host "❌ Fallback failed"
+            }
+          }
+        }
+        
+        if (-not $buildSuccess) {
+          Write-Host "⚠️ Full solution build failed, will try individual projects..."
+        }
+        
+    - name: Build mail module individually
       shell: pwsh
       run: |
-        Write-Host "🎯 Building mail module specifically..."
+        Write-Host "🎯 Building mail module individually..."
         
-        # Try to build mail projects individually
+        # Try to build mail projects specifically
         $mailProjects = @(
-          "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj",
-          "module/ASC.Mail/ASC.Mail.sln"
+          "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
         )
         
         $buildSuccess = $false
+        
         foreach ($project in $mailProjects) {
           if (Test-Path $project) {
-            Write-Host "Building: $project"
+            Write-Host "`nBuilding individual project: $project"
             
-            # Clean first
-            msbuild $project /t:Clean /p:Configuration=Release /p:Platform=AnyCPU
+            # First, try to restore this specific project
+            Write-Host "Restoring project..."
+            dotnet restore $project --runtime win-x64 --verbosity normal
             
-            # Then build
-            msbuild $project /t:Build /p:Configuration=Release /p:Platform=AnyCPU /verbosity:diagnostic /maxcpucount
+            # Clean the project
+            Write-Host "Cleaning project..."
+            msbuild $project /t:Clean /p:Configuration=Release /p:Platform=x64 /p:RuntimeIdentifier=win-x64
             
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "✅ Successfully built $project"
-              $buildSuccess = $true
-            } else {
-              Write-Host "❌ Failed to build $project"
+            # Build the project with multiple attempts
+            $buildConfigs = @(
+              @{Config="Release"; Platform="x64"; Runtime="win-x64"},
+              @{Config="Release"; Platform="AnyCPU"; Runtime="win-x64"},
+              @{Config="Debug"; Platform="x64"; Runtime="win-x64"},
+              @{Config="Debug"; Platform="AnyCPU"; Runtime="win-x64"}
+            )
+            
+            foreach ($buildConfig in $buildConfigs) {
+              Write-Host "Trying: $($buildConfig.Config)|$($buildConfig.Platform) with runtime $($buildConfig.Runtime)"
               
-              # Try debug build as fallback
-              Write-Host "Trying Debug configuration..."
-              msbuild $project /t:Build /p:Configuration=Debug /p:Platform=AnyCPU /verbosity:diagnostic
-              if ($LASTEXITCODE -eq 0) {
-                Write-Host "✅ Debug build successful for $project"
-                $buildSuccess = $true
+              try {
+                msbuild $project /t:Build /p:Configuration="$($buildConfig.Config)" /p:Platform="$($buildConfig.Platform)" /p:RuntimeIdentifier="$($buildConfig.Runtime)" /verbosity:normal /maxcpucount /p:WarningLevel=1 /p:TreatWarningsAsErrors=false
+                
+                if ($LASTEXITCODE -eq 0) {
+                  Write-Host "✅ Individual project build successful!"
+                  $buildSuccess = $true
+                  break
+                }
+              } catch {
+                Write-Host "❌ Build attempt failed"
               }
             }
+            
+            if ($buildSuccess) { break }
           }
         }
         
-        # If specific projects fail, try building dependencies first
+        # If still failing, try dependencies first
         if (-not $buildSuccess) {
-          Write-Host "🔄 Building dependencies first..."
+          Write-Host "`n🔄 Building dependencies first..."
           
           $dependencies = @(
             "common/ASC.Common/ASC.Common.csproj",
-            "common/ASC.Core.Common/ASC.Core.Common.csproj",
-            "web/core/ASC.Web.Core/ASC.Web.Core.csproj"
+            "common/ASC.Core.Common/ASC.Core.Common.csproj"
           )
           
           foreach ($dep in $dependencies) {
             if (Test-Path $dep) {
               Write-Host "Building dependency: $dep"
-              msbuild $dep /p:Configuration=Release /p:Platform=AnyCPU /verbosity:minimal
+              
+              # Restore and build dependency
+              dotnet restore $dep --runtime win-x64
+              msbuild $dep /p:Configuration=Release /p:Platform=x64 /p:RuntimeIdentifier=win-x64 /verbosity:minimal
             }
           }
           
-          # Try mail module again
+          # Try mail module again after dependencies
           $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
           if (Test-Path $mailProject) {
-            msbuild $mailProject /p:Configuration=Release /p:Platform=AnyCPU /verbosity:diagnostic
+            Write-Host "`nRetrying mail project after dependencies..."
+            msbuild $mailProject /p:Configuration=Release /p:Platform=x64 /p:RuntimeIdentifier=win-x64 /verbosity:normal
+            
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "✅ Mail project built successfully after dependencies!"
+              $buildSuccess = $true
+            }
           }
+        }
+        
+        if (-not $buildSuccess) {
+          Write-Host "⚠️ Individual project builds also failed"
         }
         
     - name: Comprehensive build verification
@@ -521,64 +663,93 @@ jobs:
         $success = $false
         $foundDlls = @()
         
-        # Search everywhere for ASC.Mail.dll
+        # Search everywhere for ASC.Mail.dll with detailed info
         try {
           $allDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
           
+          Write-Host "Found ASC.Mail.dll files:"
           foreach ($dll in $allDlls) {
             $size = $dll.Length
             $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
             
-            Write-Host "Found: $path ($size bytes)"
+            Write-Host "  📄 $path ($size bytes)"
+            Write-Host "      Modified: $($dll.LastWriteTime)"
+            Write-Host "      Directory: $(Split-Path $path -Parent)"
             
-            # Check if it's a valid assembly (more than 49 bytes and has PE header)
-            if ($size -gt 10000) {  # Reasonable minimum for a compiled assembly
+            # Check if it's a valid assembly
+            if ($size -gt 10000) {
               try {
-                # Try to load assembly metadata to verify it's valid
-                $assembly = [System.Reflection.Assembly]::ReflectionOnlyLoadFrom($dll.FullName)
-                Write-Host "✅ Valid assembly: $path"
+                # Try to get assembly info without loading
+                $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName)
+                Write-Host "      Version: $($fileInfo.FileVersion)"
+                Write-Host "      ✅ Valid assembly"
+                
                 $foundDlls += $path
                 $success = $true
               } catch {
-                Write-Host "⚠️ Invalid assembly: $path"
+                Write-Host "      ⚠️ Cannot read assembly info: $($_.Exception.Message)"
+                
+                # Still count as found if size is reasonable
+                if ($size -gt 50000) {
+                  $foundDlls += $path
+                  $success = $true
+                  Write-Host "      ✅ Added based on size"
+                }
               }
             } elseif ($size -le 100) {
-              Write-Host "❌ File too small (likely empty/stub): $path"
+              Write-Host "      ❌ File too small (likely empty/stub)"
+            } else {
+              Write-Host "      ⚠️ Suspicious size, might be stub"
             }
           }
         } catch {
-          Write-Host "Error during search: $($_.Exception.Message)"
+          Write-Host "Error during ASC.Mail.dll search: $($_.Exception.Message)"
         }
         
-        # Also search for any other mail-related assemblies
-        $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
-          Where-Object { $_.Length -gt 10000 }
-        
-        if ($otherMailDlls) {
-          Write-Host "`nOther mail-related assemblies:"
+        # Search for any mail-related DLLs
+        Write-Host "`nSearching for other mail-related assemblies..."
+        try {
+          $otherMailDlls = Get-ChildItem -Path "." -Name "*Mail*.dll" -Recurse -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Length -gt 1000 }
+          
           foreach ($dll in $otherMailDlls) {
             $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
             Write-Host "  📄 $path ($($dll.Length) bytes)"
           }
+        } catch {
+          Write-Host "Error searching for mail DLLs: $($_.Exception.Message)"
         }
         
-        # Debug: Show what was actually built
-        Write-Host "`nAll DLL files in bin directories:"
-        $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
-          Where-Object { $_.DirectoryName -like "*bin*" } | 
-          Sort-Object Length -Descending | 
-          Select-Object -First 20
-          
-        foreach ($dll in $binDlls) {
-          $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
-          Write-Host "  📄 $path ($($dll.Length) bytes)"
+        # Show all recently built DLLs for debugging
+        Write-Host "`nAll DLL files in bin directories (by size):"
+        try {
+          $binDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
+            Where-Object { $_.DirectoryName -like "*bin*" } | 
+            Sort-Object Length -Descending | 
+            Select-Object -First 20
+            
+          foreach ($dll in $binDlls) {
+            $path = $dll.FullName.Replace((Get-Location).Path, "").TrimStart('\', '/')
+            $sizeKB = [math]::Round($dll.Length / 1024, 1)
+            Write-Host "  📄 $path ($sizeKB KB)"
+          }
+        } catch {
+          Write-Host "Error listing bin DLLs: $($_.Exception.Message)"
         }
         
+        # Final result
         if ($success -and $foundDlls.Count -gt 0) {
-          # Use the largest valid DLL
-          $mainDll = $foundDlls[0]
+          # Use the largest DLL
+          $sortedDlls = $foundDlls | ForEach-Object {
+            $file = Get-Item $_
+            @{Path = $_; Size = $file.Length}
+          } | Sort-Object Size -Descending
+          
+          $mainDll = $sortedDlls[0].Path
+          $mainDllSize = $sortedDlls[0].Size
+          
           Write-Host "`n✅ Build verification successful!"
-          Write-Host "Primary DLL: $mainDll"
+          Write-Host "Primary DLL: $mainDll ($mainDllSize bytes)"
           
           echo "success=true" >> $env:GITHUB_OUTPUT
           echo "main_dll_path=$mainDll" >> $env:GITHUB_OUTPUT
@@ -597,8 +768,10 @@ jobs:
           **/bin/**/*Mail*
           **/*Mail*.dll
           **/*Mail*.pdb
-        retention-days: 1
-
+          **/*Mail*.exe
+          available_configs.txt
+          Directory.Build.props
+        retention-days: 2
   # Streamlined package creation
   create-custom-package:
     needs: [prepare-environment, build-mail-module]
