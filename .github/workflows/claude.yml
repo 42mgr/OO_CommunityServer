@@ -51,7 +51,7 @@ jobs:
         # Make the script executable and run it (should work perfectly on Linux)
         if [ -f ".github/build-scripts/download-deb.sh" ]; then
           chmod +x .github/build-scripts/download-deb.sh
-          ./.github/build-scripts/download-deb.sh
+          sudo ./.github/build-scripts/download-deb.sh
           
           # Verify the script worked
           if [ -f "onlyoffice-communityserver.deb" ] && [ -s "onlyoffice-communityserver.deb" ]; then
