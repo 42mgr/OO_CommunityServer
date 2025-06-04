@@ -215,44 +215,97 @@ jobs:
         Set-Content -Path "Directory.Build.props" -Value $buildPropsXml -Encoding UTF8
         Write-Host "✅ Created comprehensive Directory.Build.props"
         
-    - name: Restore NuGet packages comprehensively
+    - name: Restore NuGet packages (simplified)
       shell: pwsh
       run: |
-        Write-Host "Restoring NuGet packages comprehensively..."
+        Write-Host "Restoring NuGet packages..."
         
-        # First, try to restore any solution files
-        $slnFiles = Get-ChildItem -Name "*.sln" -Recurse
+        # Ensure we're in the workspace directory
+        Set-Location $env:GITHUB_WORKSPACE
+        Write-Host "Working from: $(Get-Location)"
         
-        if ($slnFiles) {
-          foreach ($sln in $slnFiles) {
-            Write-Host "Restoring packages for solution: $sln"
+        # Method 1: Restore solution files (most reliable)
+        Write-Host "`n=== Restoring Solution Files ==="
+        if (Test-Path "*.sln") {
+          Get-ChildItem "*.sln" | ForEach-Object {
+            Write-Host "Restoring solution: $($_.Name)"
             try {
-              nuget restore $sln -Verbosity normal -NonInteractive -Force
-              Write-Host "✅ Successfully restored $sln"
+              nuget restore $_.FullName -Verbosity quiet
+              Write-Host "✅ $($_.Name) restored successfully"
             } catch {
-              Write-Host "⚠️ Warning: Failed to restore $sln - $($_.Exception.Message)"
+              Write-Host "⚠️ Failed to restore $($_.Name): $($_.Exception.Message)"
+            }
+          }
+        }
+        
+        # Find solution files recursively if none in root
+        $allSolutions = Get-ChildItem -Path "." -Filter "*.sln" -Recurse -ErrorAction SilentlyContinue
+        if ($allSolutions) {
+          Write-Host "Found $($allSolutions.Count) solution files total"
+          foreach ($sln in $allSolutions) {
+            if (-not $sln.FullName.Contains("packages")) {  # Skip solutions in packages folder
+              Write-Host "Restoring: $($sln.FullName)"
+              try {
+                nuget restore $sln.FullName -Verbosity quiet
+              } catch {
+                Write-Host "⚠️ Failed: $($_.Exception.Message)"
+              }
+            }
+          }
+        }
+        
+        # Method 2: Restore individual packages.config files
+        Write-Host "`n=== Restoring Individual Package Configs ==="
+        $packageConfigs = Get-ChildItem -Path "." -Filter "packages.config" -Recurse -ErrorAction SilentlyContinue
+        
+        if ($packageConfigs) {
+          Write-Host "Found $($packageConfigs.Count) packages.config files"
+          
+          foreach ($config in $packageConfigs) {
+            if (-not $config.FullName.Contains("packages\")) {  # Skip configs in packages folder
+              $projectDir = $config.Directory.FullName
+              $projectName = $config.Directory.Name
+              
+              Write-Host "Restoring packages for project: $projectName"
+              
+              try {
+                # Calculate relative path to packages directory
+                $relativePath = [System.IO.Path]::GetRelativePath($projectDir, "$env:GITHUB_WORKSPACE\packages")
+                
+                Push-Location $projectDir
+                nuget restore packages.config -PackagesDirectory $relativePath -Verbosity quiet
+                Write-Host "✅ $projectName packages restored"
+                Pop-Location
+              } catch {
+                Write-Host "⚠️ Failed to restore $projectName packages: $($_.Exception.Message)"
+                # Ensure we pop location even on error
+                try { Pop-Location } catch { }
+              }
             }
           }
         } else {
-          Write-Host "No solution files found"
+          Write-Host "No packages.config files found"
         }
         
-        # Restore packages for individual projects that have packages.config
-        $packagesConfigs = Get-ChildItem -Name "packages.config" -Recurse
-        
-        foreach ($pkgConfig in $packagesConfigs) {
-          $projectDir = Split-Path $pkgConfig -Parent
-          Write-Host "Restoring packages for: $projectDir"
-          
+        # Method 3: Try restoring mail module specifically
+        Write-Host "`n=== Restoring Mail Module Specifically ==="
+        $mailPackageConfig = "module\ASC.Mail\ASC.Mail\packages.config"
+        if (Test-Path $mailPackageConfig) {
+          Write-Host "Restoring mail module packages..."
           try {
-            Set-Location $projectDir
-            nuget restore packages.config -PackagesDirectory "../../packages" -Verbosity normal -Force
+            Set-Location "module\ASC.Mail\ASC.Mail"
+            nuget restore packages.config -PackagesDirectory "..\..\..\packages" -Verbosity normal
+            Write-Host "✅ Mail module packages restored"
             Set-Location $env:GITHUB_WORKSPACE
           } catch {
-            Write-Host "⚠️ Warning: Failed to restore packages for $projectDir"
+            Write-Host "⚠️ Failed to restore mail module packages: $($_.Exception.Message)"
             Set-Location $env:GITHUB_WORKSPACE
           }
+        } else {
+          Write-Host "Mail module packages.config not found at expected location"
         }
+        
+        Write-Host "`n✅ NuGet restore completed"
         
     - name: Build dependencies first, then mail module
       shell: pwsh
