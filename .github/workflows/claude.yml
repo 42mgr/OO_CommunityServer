@@ -1,4 +1,85 @@
-name: Build Custom OnlyOffice with Mail Module Changes
+- name: Debug build issues (if needed)
+      if: steps.verify-build.outputs.success != 'true'
+      shell: pwsh
+      run: |
+        Write-Host "🔍 Investigating build issues..."
+        
+        # Check if the mail project file exists and is valid
+        $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
+        if (Test-Path $mailProject) {
+          Write-Host "`n📋 Checking project file: $mailProject"
+          
+          try {
+            $projectContent = Get-Content $mailProject -Raw
+            
+            # Check for common issues
+            if ($projectContent -match "<OutputType>") {
+              $outputType = [regex]::Match($projectContent, "<OutputType>(.*?)</OutputType>").Groups[1].Value
+              Write-Host "   Output Type: $outputType"
+            }
+            
+            if ($projectContent -match "<TargetFramework>") {
+              $targetFramework = [regex]::Match($projectContent, "<TargetFramework>(.*?)</TargetFramework>").Groups[1].Value
+              Write-Host "   Target Framework: $targetFramework"
+            }
+            
+            # Check for project references
+            $projectRefs = [regex]::Matches($projectContent, "<ProjectReference[^>]*Include=`"([^`"]*)`"")
+            Write-Host "   Project References: $($projectRefs.Count)"
+            
+            # Check for NuGet package references
+            $packageRefs = [regex]::Matches($projectContent, "<PackageReference[^>]*Include=`"([^`"]*)`"")
+            Write-Host "   Package References: $($packageRefs.Count)"
+            
+          } catch {
+            Write-Host "   ❌ Error reading project file: $($_.Exception.Message)"
+          }
+        }
+        
+        # Check what files actually exist in the source directory
+        Write-Host "`n📂 Source files in mail module:"
+        if (Test-Path "module/ASC.Mail/ASC.Mail") {
+          $sourceFiles = Get-ChildItem "module/ASC.Mail/ASC.Mail" -Name "*.cs" -Recurse | Select-Object -First 10
+          foreach ($file in $sourceFiles) {
+            Write-Host "   📄 $file"
+          }
+          
+          $totalSources = (Get-ChildItem "module/ASC.Mail/ASC.Mail" -Name "*.cs" -Recurse).Count
+          Write-Host "   Total C# files: $totalSources"
+        }
+        
+        # Check for any compilation outputs
+        Write-Host "`n🔍 Searching for any compilation outputs..."
+        $allOutputs = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { 
+          $_.Name -like "*Mail*" 
+        }
+        
+        if ($allOutputs) {
+          Write-Host "Found mail-related DLLs:"
+          foreach ($output in $allOutputs) {
+            Write-Host "   📄 $($output.FullName.Replace((Get-Location).Path, '.')) - $($output.Length) bytes"
+          }
+        } else {
+          Write-Host "❌ No mail-related DLLs found anywhere"
+        }
+        
+        # Check if there are any error files
+        $errorFiles = Get-ChildItem -Path "." -Name "*.log" -Recurse | Select-Object -First 5
+        if ($errorFiles) {
+          Write-Host "`n📋 Log files found:"
+          foreach ($log in $errorFiles) {
+            Write-Host "   📄 $($log.Name)"
+            if ($log.Length -lt 10000) {  # Only show small log files
+              try {
+                $content = Get-Content $log.FullName | Select-Object -Last 10
+                Write-Host "      Last 10 lines:"
+                $content | ForEach-Object { Write-Host "      $_" }
+              } catch {
+                Write-Host "      Unable to read log"
+              }
+            }
+          }
+        }name: Build Custom OnlyOffice with Mail Module Changes
 
 on:
   workflow_dispatch:
@@ -118,10 +199,14 @@ jobs:
         download_success=false
         
         # Method 1: Download using apt-get download
-        if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
-          deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+        echo "📦 Downloading OnlyOffice Community Server package..."
+        if apt-get download onlyoffice-communityserver 2>/dev/null; then
+          deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
           if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-            mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+            # Rename to standard name if needed
+            if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
+              mv "$deb_file" onlyoffice-communityserver.deb
+            fi
             echo "✅ Downloaded via apt-get download"
             download_success=true
           fi
@@ -158,13 +243,16 @@ jobs:
           echo "🔄 Trying alternative repositories..."
           
           # Try the community repository
+          echo "🔄 Trying alternative repositories..."
           echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
           sudo apt-get update -qq
           
-          if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
-            deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+          if apt-get download onlyoffice-communityserver 2>/dev/null; then
+            deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
             if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+              if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
+                mv "$deb_file" onlyoffice-communityserver.deb
+              fi
               echo "✅ Downloaded from community repository"
               download_success=true
             fi
@@ -452,17 +540,69 @@ jobs:
       if: steps.cache-build.outputs.cache-hit != 'true'
       shell: pwsh
       run: |
-        Write-Host "🏗️ Building mail module..."
+        Write-Host "🏗️ Building mail module with detailed logging..."
         
         # Build only what we need for the mail module
         $mailProject = "module/ASC.Mail/ASC.Mail/ASC.Mail.csproj"
         
         if (Test-Path $mailProject) {
-          msbuild $mailProject /p:Configuration=Release /p:Platform=AnyCPU /verbosity:minimal /maxcpucount
+          Write-Host "Building mail project: $mailProject"
+          
+          # Build with detailed verbosity to catch issues
+          $buildResult = msbuild $mailProject /p:Configuration=Release /p:Platform=AnyCPU /verbosity:detailed /maxcpucount /flp:logfile=build.log`;verbosity=detailed
+          
+          # Check build exit code
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Build completed successfully"
+          } else {
+            Write-Host "⚠️ Build completed with exit code: $LASTEXITCODE"
+            
+            # Show detailed build log for errors
+            if (Test-Path "build.log") {
+              Write-Host "📋 Build log content:"
+              Get-Content "build.log" | Select-Object -Last 50
+            }
+          }
+          
+          # Check what was actually produced
+          Write-Host "`n🔍 Checking build outputs..."
+          $outputDir = "module/ASC.Mail/ASC.Mail/bin/Release"
+          if (Test-Path $outputDir) {
+            $files = Get-ChildItem $outputDir -Recurse
+            Write-Host "Files in $outputDir :"
+            foreach ($file in $files) {
+              Write-Host "  📄 $($file.Name) - $($file.Length) bytes"
+            }
+          }
+          
+          # Also check the web studio output
+          $webOutputDir = "web/studio/ASC.Web.Studio/bin"
+          if (Test-Path $webOutputDir) {
+            Write-Host "`nFiles in $webOutputDir :"
+            $webFiles = Get-ChildItem $webOutputDir -Name "ASC.Mail*"
+            foreach ($file in $webFiles) {
+              $fullFile = Get-Item "$webOutputDir/$file"
+              Write-Host "  📄 $($fullFile.Name) - $($fullFile.Length) bytes"
+            }
+          }
+          
         } else {
-          # Fallback to solution build
+          Write-Host "⚠️ Mail project not found, trying solution build..."
+          
+          # Fallback to solution build with detailed logging
           $solution = Get-ChildItem -Name "*.sln" | Select-Object -First 1
-          msbuild $solution /p:Configuration=Release /p:Platform="Any CPU" /verbosity:minimal /maxcpucount
+          if ($solution) {
+            Write-Host "Building solution: $solution"
+            msbuild $solution /p:Configuration=Release /p:Platform="Any CPU" /verbosity:detailed /maxcpucount /flp:logfile=solution_build.log`;verbosity=detailed
+            
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "⚠️ Solution build failed with exit code: $LASTEXITCODE"
+              if (Test-Path "solution_build.log") {
+                Write-Host "📋 Solution build log (last 50 lines):"
+                Get-Content "solution_build.log" | Select-Object -Last 50
+              }
+            }
+          }
         }
         
     - name: Verify build results
@@ -502,16 +642,19 @@ jobs:
             Write-Host "Found ASC.Mail.dll files:"
             foreach ($dll in $allMailDlls) {
               try {
-                $relativePath = $dll.FullName
-                if ($relativePath -and $currentDir) {
-                  $relativePath = $relativePath.Replace($currentDir + "\", "").Replace($currentDir + "/", "")
-                }
-                $size = if ($dll.Length) { $dll.Length } else { "unknown" }
-                Write-Host "  📁 $relativePath ($size bytes)"
-                
-                if ($foundDlls -notcontains $relativePath) {
-                  $foundDlls += $relativePath
-                  $success = $true
+                $fullPath = $dll.FullName
+                if ($fullPath -and $currentDir) {
+                  $relativePath = $fullPath.Replace($currentDir, "").TrimStart('\', '/')
+                  $size = if ($dll.Length) { $dll.Length } else { "unknown" }
+                  Write-Host "  📁 $relativePath ($size bytes)"
+                  
+                  # Only add non-empty paths and check if size > 1000 bytes (valid DLL)
+                  if ($relativePath -and $dll.Length -gt 1000) {
+                    if ($foundDlls -notcontains $relativePath) {
+                      $foundDlls += $relativePath
+                      $success = $true
+                    }
+                  }
                 }
               } catch {
                 Write-Host "  ⚠️ Error processing file: $($dll.Name)"
@@ -524,21 +667,96 @@ jobs:
           Write-Host "⚠️ Error during workspace search: $($_.Exception.Message)"
         }
         
-        if ($success) {
+        if ($success -and $foundDlls.Count -gt 0) {
           Write-Host "`n✅ Build successful! Found $($foundDlls.Count) ASC.Mail.dll file(s)"
           
-          # Use the first found file as the main one
-          $mainDllPath = $foundDlls[0]
-          Write-Host "📋 Primary assembly: $mainDllPath"
+          # Filter and find the largest/best DLL
+          $validDlls = @()
+          $suspiciousDlls = @()
           
-          # Store the path for upload (ensure it's properly formatted)
-          $outputPath = $mainDllPath -replace '\\', '/'
-          echo "main_dll_path=$outputPath" >> $env:GITHUB_OUTPUT
+          foreach ($path in $foundDlls) {
+            try {
+              if (Test-Path $path) {
+                $dll = Get-Item $path
+                Write-Host "`n🔍 Investigating: $path"
+                Write-Host "   Size: $($dll.Length) bytes"
+                Write-Host "   Created: $($dll.CreationTime)"
+                Write-Host "   Modified: $($dll.LastWriteTime)"
+                
+                if ($dll.Length -gt 100000) {  # Realistic DLL size (>100KB)
+                  $validDlls += @{Path = $path; Size = $dll.Length}
+                  Write-Host "   ✅ Valid DLL size"
+                } elseif ($dll.Length -gt 1000) {
+                  Write-Host "   ⚠️ Small but possible DLL"
+                  $validDlls += @{Path = $path; Size = $dll.Length}
+                } else {
+                  Write-Host "   ❌ Suspiciously small file"
+                  $suspiciousDlls += $path
+                  
+                  # Check file content for tiny files
+                  if ($dll.Length -lt 1000) {
+                    try {
+                      $content = Get-Content $path -Raw -ErrorAction SilentlyContinue
+                      if ($content) {
+                        Write-Host "   📄 Content preview: $($content.Substring(0, [Math]::Min(100, $content.Length)))"
+                      }
+                    } catch {
+                      Write-Host "   📄 Unable to read content (binary file)"
+                    }
+                  }
+                }
+              }
+            } catch {
+              Write-Host "  ⚠️ Could not validate: $path - $($_.Exception.Message)"
+            }
+          }
           
-          # Also store all found paths
-          $allPaths = $foundDlls -join ','
-          echo "all_dll_paths=$allPaths" >> $env:GITHUB_OUTPUT
-          
+          if ($validDlls.Count -gt 0) {
+            # Sort by size and take the largest
+            $mainDll = ($validDlls | Sort-Object Size -Descending)[0]
+            $mainDllPath = $mainDll.Path
+            Write-Host "`n🎯 Selected primary assembly: $mainDllPath ($($mainDll.Size) bytes)"
+            
+            # Store the path for upload (ensure it's properly formatted)
+            $outputPath = $mainDllPath -replace '\\', '/'
+            echo "main_dll_path=$outputPath" >> $env:GITHUB_OUTPUT
+            
+            # Also store the directory for wildcard uploads
+            $dllDir = Split-Path $outputPath -Parent
+            echo "main_dll_dir=$dllDir" >> $env:GITHUB_OUTPUT
+            
+          } elseif ($suspiciousDlls.Count -gt 0) {
+            Write-Host "`n❌ Only found suspicious small files:"
+            foreach ($path in $suspiciousDlls) {
+              Write-Host "   📄 $path"
+            }
+            Write-Host "`n🔍 This suggests a build failure. Checking for common issues..."
+            
+            # Check for common build problems
+            Write-Host "`n📋 Build diagnostics:"
+            
+            # Check if build log exists
+            if (Test-Path "build.log") {
+              Write-Host "Build log found, checking for errors..."
+              $buildErrors = Get-Content "build.log" | Where-Object { $_ -match "error|Error|ERROR" }
+              if ($buildErrors) {
+                Write-Host "❌ Build errors found:"
+                $buildErrors | ForEach-Object { Write-Host "   $_" }
+              }
+            }
+            
+            # Check for missing dependencies
+            $nugetErrors = Get-Content "build.log" -ErrorAction SilentlyContinue | Where-Object { $_ -match "NU1" }
+            if ($nugetErrors) {
+              Write-Host "📦 NuGet issues found:"
+              $nugetErrors | ForEach-Object { Write-Host "   $_" }
+            }
+            
+            $success = $false
+          } else {
+            Write-Host "`n❌ No valid DLL files found"
+            $success = $false
+          }
         } else {
           Write-Host "`n❌ ASC.Mail.dll not found in any expected location"
           Write-Host "🔍 Checking what was actually built..."
@@ -553,8 +771,9 @@ jobs:
               Write-Host "Recently built DLLs:"
               foreach ($dll in $builtDlls) {
                 try {
-                  $relativePath = $dll.FullName.Replace($currentDir + "\", "").Replace($currentDir + "/", "")
-                  Write-Host "  📄 $relativePath"
+                  $relativePath = $dll.FullName.Replace($currentDir, "").TrimStart('\', '/')
+                  $size = if ($dll.Length) { $dll.Length } else { "unknown" }
+                  Write-Host "  📄 $relativePath ($size bytes)"
                 } catch {
                   Write-Host "  📄 $($dll.Name)"
                 }
@@ -570,14 +789,12 @@ jobs:
         echo "success=$success" >> $env:GITHUB_OUTPUT
         
     - name: Upload build artifacts (conditional)
-      if: steps.verify-build.outputs.success == 'true'
+      if: steps.verify-build.outputs.success == 'true' && steps.verify-build.outputs.main_dll_dir != ''
       uses: actions/upload-artifact@v4
       with:
         name: mail-module-build
         path: |
-          web/studio/ASC.Web.Studio/bin/ASC.Mail.dll
-          web/studio/ASC.Web.Studio/bin/ASC.Mail.pdb
-          web/studio/ASC.Web.Studio/bin/ASC.Mail.xml
+          ${{ steps.verify-build.outputs.main_dll_dir }}/ASC.Mail.*
         retention-days: 1
 
   # Streamlined package creation
@@ -651,10 +868,15 @@ jobs:
           
           # Try to download the package using apt-get download
           echo "📦 Downloading OnlyOffice Community Server..."
-          if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
-            deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+          
+          # Download to current directory instead of /tmp
+          if apt-get download onlyoffice-communityserver 2>/dev/null; then
+            deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
             if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-              mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+              # Rename to standard name if needed
+              if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
+                mv "$deb_file" onlyoffice-communityserver.deb
+              fi
               echo "✅ Emergency download successful!"
               download_success=true
             fi
@@ -666,10 +888,12 @@ jobs:
             echo "deb https://download.onlyoffice.com/repo/debian/community stable main" | sudo tee /etc/apt/sources.list.d/onlyoffice-community.list
             sudo apt-get update -qq
             
-            if cd /tmp && apt-get download onlyoffice-communityserver 2>/dev/null; then
-              deb_file=$(find /tmp -name "onlyoffice-communityserver*.deb" -type f | head -1)
+            if apt-get download onlyoffice-communityserver 2>/dev/null; then
+              deb_file=$(find . -name "onlyoffice-communityserver*.deb" -type f | head -1)
               if [ -n "$deb_file" ] && [ -s "$deb_file" ]; then
-                mv "$deb_file" "$GITHUB_WORKSPACE/onlyoffice-communityserver.deb"
+                if [ "$deb_file" != "./onlyoffice-communityserver.deb" ]; then
+                  mv "$deb_file" onlyoffice-communityserver.deb
+                fi
                 echo "✅ Alternative repository download successful!"
                 download_success=true
               fi
