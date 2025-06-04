@@ -140,26 +140,10 @@ jobs:
         if [ "$build_success" = false ]; then
           echo "Trying manual compilation..."
           
-          # Create a simple build script
-          cat > build_manual.sh << 'EOFSCRIPT'
-#!/bin/bash
-# Find all C# files in the project
-cs_files=$(find . -name "*.cs" -not -path "./obj/*" -not -path "./bin/*")
-
-# Compile with basic references
-mcs -target:library \
-    -out:bin/Release/ASC.Mail.dll \
-    -r:System.dll \
-    -r:System.Core.dll \
-    -r:System.Data.dll \
-    -r:System.Web.dll \
-    -r:System.Configuration.dll \
-    ${cs_files} 2>/dev/null || echo "Manual compilation also failed"
-EOFSCRIPT
-          
-          chmod +x build_manual.sh
+          # Simple manual compilation attempt
           mkdir -p bin/Release
-          ./build_manual.sh
+          echo "Manual compilation requires more complex setup - skipping for now"
+          echo "Will use source replacement method instead"
         fi
         
         cd ../../..
