@@ -393,6 +393,7 @@ jobs:
         )
         
         $foundDlls = @()
+        $currentDir = (Get-Location).Path
         
         foreach ($path in $possiblePaths) {
           if (Test-Path $path) {
@@ -407,43 +408,75 @@ jobs:
         
         # Also search for any ASC.Mail.dll files
         Write-Host "`n🔍 Searching entire workspace for ASC.Mail.dll..."
-        $allMailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
-        
-        if ($allMailDlls) {
-          Write-Host "Found ASC.Mail.dll files:"
-          foreach ($dll in $allMailDlls) {
-            $fullPath = $dll.FullName.Replace((Get-Location).Path + "\", "")
-            $size = $dll.Length
-            Write-Host "  📁 $fullPath ($size bytes)"
-            if ($foundDlls -notcontains $fullPath) {
-              $foundDlls += $fullPath
-              $success = $true
+        try {
+          $allMailDlls = Get-ChildItem -Path "." -Name "ASC.Mail.dll" -Recurse -ErrorAction SilentlyContinue
+          
+          if ($allMailDlls -and $allMailDlls.Count -gt 0) {
+            Write-Host "Found ASC.Mail.dll files:"
+            foreach ($dll in $allMailDlls) {
+              try {
+                $relativePath = $dll.FullName
+                if ($relativePath -and $currentDir) {
+                  $relativePath = $relativePath.Replace($currentDir + "\", "").Replace($currentDir + "/", "")
+                }
+                $size = if ($dll.Length) { $dll.Length } else { "unknown" }
+                Write-Host "  📁 $relativePath ($size bytes)"
+                
+                if ($foundDlls -notcontains $relativePath) {
+                  $foundDlls += $relativePath
+                  $success = $true
+                }
+              } catch {
+                Write-Host "  ⚠️ Error processing file: $($dll.Name)"
+              }
             }
+          } else {
+            Write-Host "No additional ASC.Mail.dll files found in workspace search"
           }
+        } catch {
+          Write-Host "⚠️ Error during workspace search: $($_.Exception.Message)"
         }
         
         if ($success) {
           Write-Host "`n✅ Build successful! Found $($foundDlls.Count) ASC.Mail.dll file(s)"
-          # Use the largest file (most likely the main one)
-          $mainDll = $foundDlls | ForEach-Object { Get-Item $_ } | Sort-Object Length -Descending | Select-Object -First 1
-          Write-Host "📋 Primary assembly: $($mainDll.FullName.Replace((Get-Location).Path + '\', ''))"
           
-          # Store the path for upload
-          echo "main_dll_path=$($mainDll.FullName.Replace((Get-Location).Path + '\', ''))" >> $env:GITHUB_OUTPUT
+          # Use the first found file as the main one
+          $mainDllPath = $foundDlls[0]
+          Write-Host "📋 Primary assembly: $mainDllPath"
+          
+          # Store the path for upload (ensure it's properly formatted)
+          $outputPath = $mainDllPath -replace '\\', '/'
+          echo "main_dll_path=$outputPath" >> $env:GITHUB_OUTPUT
+          
+          # Also store all found paths
+          $allPaths = $foundDlls -join ','
+          echo "all_dll_paths=$allPaths" >> $env:GITHUB_OUTPUT
+          
         } else {
           Write-Host "`n❌ ASC.Mail.dll not found in any expected location"
           Write-Host "🔍 Checking what was actually built..."
           
           # Show what DLLs were actually built
-          $builtDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse | Where-Object { 
-            $_.DirectoryName -like "*bin*" 
-          } | Select-Object -First 10
-          
-          if ($builtDlls) {
-            Write-Host "Recently built DLLs:"
-            foreach ($dll in $builtDlls) {
-              Write-Host "  📄 $($dll.FullName.Replace((Get-Location).Path + '\', ''))"
+          try {
+            $builtDlls = Get-ChildItem -Path "." -Name "*.dll" -Recurse -ErrorAction SilentlyContinue | 
+              Where-Object { $_.DirectoryName -like "*bin*" } | 
+              Select-Object -First 10
+            
+            if ($builtDlls) {
+              Write-Host "Recently built DLLs:"
+              foreach ($dll in $builtDlls) {
+                try {
+                  $relativePath = $dll.FullName.Replace($currentDir + "\", "").Replace($currentDir + "/", "")
+                  Write-Host "  📄 $relativePath"
+                } catch {
+                  Write-Host "  📄 $($dll.Name)"
+                }
+              }
+            } else {
+              Write-Host "No DLL files found in bin directories"
             }
+          } catch {
+            Write-Host "Error searching for built DLLs: $($_.Exception.Message)"
           }
         }
         
