@@ -734,7 +734,7 @@ build-mail-module:
         retention-days: 1
         
   # Streamlined package creation
-  create-custom-package:
+create-custom-package:
     needs: [prepare-environment, build-mail-module]
     runs-on: ubuntu-latest
     if: always() && (needs.prepare-environment.result == 'success' || needs.prepare-environment.result == 'skipped')
