@@ -248,8 +248,7 @@ jobs:
           echo "nuget_cached=false" >> $env:GITHUB_OUTPUT
         }
         
-    - name: Fix ALL project reference metadata systematically
-      if: steps.build-status.outputs.build_needed == 'true'
+- name: Fix ALL project reference metadata systematically
       shell: pwsh
       run: |
         Write-Host "=== COMPREHENSIVE PROJECT REFERENCE METADATA FIX ==="
@@ -262,7 +261,7 @@ jobs:
         # Create a mapping of project names to GUIDs for consistency
         $projectGuids = @{}
         
-        # Function to generate deterministic GUID from project name
+        # Function to generate deterministic GUID from project name - FIXED VERSION
         function Get-DeterministicGuid($projectName) {
           if ($script:projectGuids.ContainsKey($projectName)) {
             return $script:projectGuids[$projectName]
@@ -271,12 +270,37 @@ jobs:
           # Generate a deterministic GUID based on project name
           $guidSeed = $projectName.ToLower()
           $hash = [System.Security.Cryptography.SHA1]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($guidSeed))
+          
+          # Take only the first 16 bytes from the 20-byte SHA1 hash for GUID
           $guidBytes = $hash[0..15]
+          
+          # Set version and variant bits for a valid GUID
           $guidBytes[6] = ($guidBytes[6] -band 0x0F) -bor 0x50  # Version 5
           $guidBytes[8] = ($guidBytes[8] -band 0x3F) -bor 0x80  # Variant
+          
+          # Create GUID from the 16-byte array
           $guid = [System.Guid]::new($guidBytes)
           
           $script:projectGuids[$projectName] = $guid.ToString().ToUpper()
+          return $script:projectGuids[$projectName]
+        }
+        
+        # Alternative simpler GUID generation function if the above still fails
+        function Get-SimpleGuid($projectName) {
+          if ($script:projectGuids.ContainsKey($projectName)) {
+            return $script:projectGuids[$projectName]
+          }
+          
+          # Create a simple deterministic GUID based on project name hash
+          $hash = $projectName.GetHashCode()
+          $guidString = "{0:X8}-{1:X4}-{2:X4}-{3:X4}-{4:X12}" -f `
+            ($hash -band 0xFFFFFFFF), `
+            (($hash -shr 16) -band 0xFFFF), `
+            (4000 + ($hash -band 0x0FFF)), `
+            (0x8000 + (($hash -shr 8) -band 0x3FFF)), `
+            ([Math]::Abs($projectName.GetHashCode()) % 0xFFFFFFFFFFFF)
+          
+          $script:projectGuids[$projectName] = $guidString
           return $script:projectGuids[$projectName]
         }
         
@@ -284,7 +308,14 @@ jobs:
         Write-Host "`nFirst pass: Collecting project names and generating GUIDs..."
         foreach ($proj in $allProjects) {
           $projectName = [System.IO.Path]::GetFileNameWithoutExtension($proj)
-          $guid = Get-DeterministicGuid $projectName
+          try {
+            $guid = Get-DeterministicGuid $projectName
+            Write-Host "  $projectName -> {$guid}"
+          } catch {
+            Write-Host "  Warning: Complex GUID generation failed for $projectName, using simple method"
+            $guid = Get-SimpleGuid $projectName
+            Write-Host "  $projectName -> {$guid} (simple)"
+          }
         }
         
         # Second pass: fix all project reference metadata
@@ -292,26 +323,37 @@ jobs:
         $totalFixed = 0
         
         foreach ($proj in $allProjects) {
+          Write-Host "`nProcessing: $proj"
+          
           if (Test-Path $proj) {
             $content = Get-Content $proj -Raw
             $originalContent = $content
             
-            # Find all ProjectReference elements
-            $projectRefs = [regex]::Matches($content, '<ProjectReference\s+Include="([^"]+)"[^>]*>(.*?)</ProjectReference>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            # Find all ProjectReference elements - improved regex
+            $projectRefPattern = '<ProjectReference\s+Include="([^"]+)"[^>]*?(?:\s*/>|>(.*?)</ProjectReference>)'
+            $projectRefs = [regex]::Matches($content, $projectRefPattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
             
             if ($projectRefs.Count -gt 0) {
+              Write-Host "  Found $($projectRefs.Count) project references to fix"
+              
               foreach ($match in $projectRefs) {
                 $fullMatch = $match.Value
                 $includePath = $match.Groups[1].Value
-                $innerContent = $match.Groups[2].Value
+                $innerContent = if ($match.Groups[2].Success) { $match.Groups[2].Value } else { "" }
                 
                 # Extract project name from include path
                 $referencedProjectName = [System.IO.Path]::GetFileNameWithoutExtension($includePath)
                 
                 # Check if this reference already has proper metadata
                 if (-not $innerContent.Contains('<Project>') -or -not $innerContent.Contains('<n>')) {
+                  Write-Host "    Fixing reference to: $referencedProjectName"
+                  
                   # Get the GUID for this project
-                  $guid = Get-DeterministicGuid $referencedProjectName
+                  try {
+                    $guid = Get-DeterministicGuid $referencedProjectName
+                  } catch {
+                    $guid = Get-SimpleGuid $referencedProjectName
+                  }
                   
                   # Create proper ProjectReference with metadata
                   $newProjectRef = "<ProjectReference Include=`"$includePath`">`n"
@@ -322,52 +364,101 @@ jobs:
                   # Replace the old reference
                   $content = $content -replace [regex]::Escape($fullMatch), $newProjectRef
                   $totalFixed++
+                  Write-Host "      Added metadata: {$guid}"
+                } else {
+                  Write-Host "    Reference to $referencedProjectName already has metadata"
                 }
               }
               
               # Save the file if it was modified
               if ($content -ne $originalContent) {
                 Set-Content -Path $proj -Value $content -Encoding UTF8
+                Write-Host "  ✅ Updated $proj"
+              } else {
+                Write-Host "  ✅ $proj already properly configured"
               }
+            } else {
+              Write-Host "  No project references found"
             }
           }
         }
         
+        Write-Host "`n=== PROJECT REFERENCE FIX SUMMARY ==="
+        Write-Host "✅ Processed $($allProjects.Count) project files"
         Write-Host "✅ Fixed $totalFixed project references"
+        Write-Host "✅ Generated $($projectGuids.Count) unique project GUIDs"
         
-        # Create Directory.Build.props
+        # Create a comprehensive Directory.Build.props to prevent future issues
         $buildPropsXml = @"
         <Project>
           <PropertyGroup>
+            <!-- Global defaults to prevent MSB3107 errors -->
             <Platform Condition="`$(Platform) == ''">AnyCPU</Platform>
             <Configuration Condition="`$(Configuration) == ''">Release</Configuration>
             <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
             <WarningLevel>1</WarningLevel>
             <OutputPath Condition="`$(OutputPath) == ''">bin\`$(Configuration)\</OutputPath>
+            
+            <!-- Project reference resolution fixes -->
             <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
             <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
             <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+            
+            <!-- Additional MSBuild settings to improve reliability -->
             <BuildProjectReferences>true</BuildProjectReferences>
+            <ResolveNuGetPackages>true</ResolveNuGetPackages>
+            <RestorePackages>true</RestorePackages>
           </PropertyGroup>
           
+          <!-- Standard configurations for all projects -->
           <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Release|AnyCPU'">
             <OutputPath>bin\Release\</OutputPath>
             <DebugType>pdbonly</DebugType>
             <Optimize>true</Optimize>
             <PlatformTarget>AnyCPU</PlatformTarget>
+            <DefineConstants>TRACE</DefineConstants>
           </PropertyGroup>
           
+          <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Debug|AnyCPU'">
+            <OutputPath>bin\Debug\</OutputPath>
+            <DebugSymbols>true</DebugSymbols>
+            <DebugType>full</DebugType>
+            <Optimize>false</Optimize>
+            <PlatformTarget>AnyCPU</PlatformTarget>
+            <DefineConstants>DEBUG;TRACE</DefineConstants>
+          </PropertyGroup>
+          
+          <!-- Ensure all projects have these configurations -->
           <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Release|Any CPU'">
             <OutputPath>bin\Release\</OutputPath>
             <DebugType>pdbonly</DebugType>
             <Optimize>true</Optimize>
             <PlatformTarget>AnyCPU</PlatformTarget>
+            <DefineConstants>TRACE</DefineConstants>
+          </PropertyGroup>
+          
+          <PropertyGroup Condition="'`$(Configuration)|`$(Platform)' == 'Debug|Any CPU'">
+            <OutputPath>bin\Debug\</OutputPath>
+            <DebugSymbols>true</DebugSymbols>
+            <DebugType>full</DebugType>
+            <Optimize>false</Optimize>
+            <PlatformTarget>AnyCPU</PlatformTarget>
+            <DefineConstants>DEBUG;TRACE</DefineConstants>
           </PropertyGroup>
         </Project>
         "@
         
         Set-Content -Path "Directory.Build.props" -Value $buildPropsXml -Encoding UTF8
-        Write-Host "✅ Created Directory.Build.props"
+        Write-Host "✅ Created comprehensive Directory.Build.props"
+        
+        # Output the project GUID mapping for reference
+        Write-Host "`n=== PROJECT GUID MAPPING ==="
+        $projectGuids.GetEnumerator() | Sort-Object Name | ForEach-Object {
+          Write-Host "  $($_.Key) = {$($_.Value)}"
+        }
+        
+        Write-Host "`n🎉 All project reference metadata has been fixed!"
+        Write-Host "This should resolve ALL MSB3107 errors across the solution."
 
     - name: Restore NuGet packages (only if not cached)
       if: steps.build-status.outputs.build_needed == 'true' && steps.build-status.outputs.nuget_cached != 'true'
