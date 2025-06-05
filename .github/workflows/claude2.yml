@@ -1,4 +1,4 @@
-name: Build OO Community Server (Linux Extract + Windows Build)
+name: Build OnlyOffice Community Server (Linux Extract + Windows Build)
 
 on:
   push:
@@ -242,20 +242,61 @@ jobs:
         New-Item -ItemType Directory -Force -Path "deployment-package"
         
         # Copy build outputs
-        if (Test-Path "**/bin/Release") {
-          Copy-Item -Recurse "**/bin/Release" "deployment-package/" -Force
+        Write-Host "🔍 Looking for build outputs..."
+        $buildOutputs = Get-ChildItem -Recurse -Directory -Name "*Release*" -ErrorAction SilentlyContinue
+        if ($buildOutputs) {
+          Write-Host "Found build outputs:"
+          $buildOutputs | ForEach-Object { Write-Host "  - $_" }
+          Copy-Item -Recurse $buildOutputs "deployment-package/" -Force -ErrorAction SilentlyContinue
+        } else {
+          Write-Host "⚠️ No Release build outputs found"
         }
         
         # Copy configuration files
-        if (Test-Path "**/App_Data") {
-          Copy-Item -Recurse "**/App_Data" "deployment-package/" -Force  
+        Write-Host "🔍 Looking for App_Data directories..."
+        $appDataDirs = Get-ChildItem -Recurse -Directory -Name "*App_Data*" -ErrorAction SilentlyContinue
+        if ($appDataDirs) {
+          Write-Host "Found App_Data directories:"
+          $appDataDirs | ForEach-Object { 
+            Write-Host "  - $_"
+            $targetPath = "deployment-package/App_Data/" + (Split-Path $_ -Leaf)
+            New-Item -ItemType Directory -Force -Path $targetPath | Out-Null
+            Copy-Item -Recurse "$_/*" $targetPath -Force -ErrorAction SilentlyContinue
+          }
+        } else {
+          Write-Host "⚠️ No App_Data directories found"
         }
         
-        # Copy any web.config files
-        Get-ChildItem -Recurse -Name "web.config" | ForEach-Object {
-          $dest = "deployment-package/configs/" + (Split-Path $_ -Leaf)
-          New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
-          Copy-Item $_ $dest -Force
+        # Copy any web.config files (with error handling)
+        Write-Host "🔍 Looking for web.config files..."
+        $webConfigs = Get-ChildItem -Recurse -Filter "web.config" -ErrorAction SilentlyContinue
+        if ($webConfigs) {
+          Write-Host "Found web.config files:"
+          New-Item -ItemType Directory -Force -Path "deployment-package/configs" | Out-Null
+          $webConfigs | ForEach-Object {
+            Write-Host "  - $($_.FullName)"
+            $dest = "deployment-package/configs/" + $_.Directory.Name + "_" + $_.Name
+            Copy-Item $_.FullName $dest -Force
+          }
+        } else {
+          Write-Host "⚠️ No web.config files found"
+        }
+        
+        # Copy any built executables and DLLs
+        Write-Host "🔍 Looking for built assemblies..."
+        $assemblies = Get-ChildItem -Recurse -Include "*.exe", "*.dll" -Path "." -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq "Release" -or $_.Directory.Name -eq "bin" }
+        if ($assemblies) {
+          Write-Host "Found $(($assemblies | Measure-Object).Count) assemblies"
+          New-Item -ItemType Directory -Force -Path "deployment-package/bin" | Out-Null
+          $assemblies | ForEach-Object {
+            Copy-Item $_.FullName "deployment-package/bin/" -Force
+          }
+        }
+        
+        # Show what we packaged
+        Write-Host "`n📊 Deployment package contents:"
+        if (Test-Path "deployment-package") {
+          Get-ChildItem -Recurse "deployment-package" | Select-Object -First 20 | Format-Table Name, Length -AutoSize
         }
         
         Write-Host "✅ Deployment package ready"
