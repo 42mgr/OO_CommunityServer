@@ -1,0 +1,280 @@
+name: Build OO Community Server (Linux Extract + Windows Build)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  extract-assets:
+    runs-on: ubuntu-latest
+    outputs:
+      asset-cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Generate cache key for assets
+      id: cache-key
+      run: |
+        # Create a cache key based on the current date (daily refresh)
+        echo "key=onlyoffice-assets-$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+        
+    - name: Check if assets are cached
+      id: cache-check
+      uses: actions/cache@v3
+      with:
+        path: extracted-assets
+        key: ${{ steps.cache-key.outputs.key }}
+        
+    - name: Download and extract OnlyOffice .deb package
+      if: steps.cache-check.outputs.cache-hit != 'true'
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # ───────── CONFIG ─────────
+        KEY_URL="https://download.onlyoffice.com/repo/onlyoffice.key"
+        REPO_BASE_URL="https://download.onlyoffice.com/repo/debian"
+        DIST="squeeze"
+        ARCH="amd64"
+        PACKAGE="onlyoffice-communityserver"
+        
+        # Temp directories
+        WORK_DIR=$(mktemp -d)
+        KEYRING="$WORK_DIR/onlyoffice.gpg"
+        OUTPUT_DIR="extracted-assets"
+        
+        echo "🔑 Downloading GPG key..."
+        curl -fsSL "$KEY_URL" -o "$WORK_DIR/onlyoffice.key"
+        
+        echo "🧰 Converting to GPG format..."
+        gpg --dearmor <"$WORK_DIR/onlyoffice.key" >"$KEYRING"
+        
+        echo "📦 Fetching package index..."
+        INDEX_URL="$REPO_BASE_URL/dists/$DIST/main/binary-$ARCH/Packages.gz"
+        curl -fsSL "$INDEX_URL" -o "$WORK_DIR/Packages.gz"
+        
+        echo "📖 Parsing package info..."
+        gzip -d "$WORK_DIR/Packages.gz"
+        DEB_URL=$(awk -v pkg="$PACKAGE" '
+          $1 == "Package:" && $2 == pkg {found=1}
+          found && $1 == "Filename:" { print $2; exit }
+        ' "$WORK_DIR/Packages")
+        
+        if [[ -z "$DEB_URL" ]]; then
+          echo "❌ Package not found in repo index."
+          exit 1
+        fi
+        
+        FULL_URL="$REPO_BASE_URL/$DEB_URL"
+        DEB_FILE=$(basename "$DEB_URL")
+        
+        echo "⬇️ Downloading $PACKAGE..."
+        curl -fsSL -o "$DEB_FILE" "$FULL_URL"
+        
+        echo "📦 Extracting .deb package..."
+        mkdir -p "$OUTPUT_DIR"
+        
+        # Extract .deb file
+        ar x "$DEB_FILE"
+        
+        # Extract data archive
+        if [ -f "data.tar.xz" ]; then
+          tar -xf data.tar.xz
+        elif [ -f "data.tar.gz" ]; then
+          tar -xzf data.tar.gz
+        else
+          echo "❌ No data archive found"
+          exit 1
+        fi
+        
+        # Copy relevant OnlyOffice files
+        echo "📁 Organizing extracted assets..."
+        if [ -d "var/www/onlyoffice" ]; then
+          cp -r var/www/onlyoffice/* "$OUTPUT_DIR/"
+        fi
+        
+        # Create a manifest of what we extracted
+        echo "📋 Creating asset manifest..."
+        find "$OUTPUT_DIR" -type f | head -50 > "$OUTPUT_DIR/manifest.txt"
+        echo "Total files extracted: $(find "$OUTPUT_DIR" -type f | wc -l)" >> "$OUTPUT_DIR/manifest.txt"
+        
+        # Cleanup
+        rm -rf "$WORK_DIR" "$DEB_FILE" *.tar.* debian-binary control*
+        
+        echo "✅ Asset extraction complete!"
+        echo "Key directories found:"
+        find "$OUTPUT_DIR" -maxdepth 3 -type d -name "*App_Data*" -o -name "*sql*" -o -name "*config*" || true
+        
+    - name: Upload extracted assets
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-extracted-assets
+        path: extracted-assets/
+        retention-days: 1
+
+  build-windows:
+    needs: extract-assets
+    runs-on: windows-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Download extracted assets
+      uses: actions/download-artifact@v4
+      with:
+        name: onlyoffice-extracted-assets
+        path: official-assets/
+        
+    - name: Display downloaded assets
+      run: |
+        Write-Host "📋 Downloaded assets:"
+        Get-ChildItem -Recurse official-assets/ | Select-Object -First 20 | Format-Table Name, Length
+        
+        Write-Host "`n📄 Asset manifest:"
+        if (Test-Path "official-assets/manifest.txt") {
+          Get-Content "official-assets/manifest.txt"
+        }
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 'lts/*'
+        
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.3.1
+      
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '5.0'
+        
+    - name: Merge official assets with source code
+      run: |
+        Write-Host "🔗 Merging official assets with source code..."
+        
+        # Define key merge paths
+        $mergePaths = @(
+          @{
+            Source = "official-assets/WebStudio/App_Data"
+            Target = "web/studio/ASC.Web.Studio/App_Data"
+            Description = "SQL configurations and app data"
+          },
+          @{
+            Source = "official-assets/ApiSystem/App_Data"  
+            Target = "products/ASC.Files/Server/App_Data"
+            Description = "API system configurations"
+          },
+          @{
+            Source = "official-assets/WebStudio/skins"
+            Target = "web/studio/ASC.Web.Studio/skins"
+            Description = "UI skins and themes"
+          },
+          @{
+            Source = "official-assets/WebStudio/UserControls"
+            Target = "web/studio/ASC.Web.Studio/UserControls"
+            Description = "User interface controls"
+          },
+          @{
+            Source = "official-assets/WebStudio/addons"
+            Target = "web/studio/ASC.Web.Studio/addons" 
+            Description = "Official addons (will merge with your CRM integration)"
+          }
+        )
+        
+        foreach ($mergePath in $mergePaths) {
+          if (Test-Path $mergePath.Source) {
+            Write-Host "✅ Merging: $($mergePath.Description)"
+            Write-Host "   From: $($mergePath.Source)"
+            Write-Host "   To: $($mergePath.Target)"
+            
+            # Create target directory if it doesn't exist
+            New-Item -ItemType Directory -Force -Path $mergePath.Target | Out-Null
+            
+            # Copy files, preserving your modifications
+            Copy-Item -Recurse "$($mergePath.Source)/*" $mergePath.Target -Force -ErrorAction SilentlyContinue
+          } else {
+            Write-Host "⚠️ Source not found: $($mergePath.Source)"
+          }
+        }
+        
+        Write-Host "`n🔍 Verifying SQL configurations..."
+        $sqlPaths = Get-ChildItem -Recurse -Path . -Name "*.sql" | Select-Object -First 10
+        if ($sqlPaths) {
+          Write-Host "SQL files found:"
+          $sqlPaths | ForEach-Object { Write-Host "  - $_" }
+        } else {
+          Write-Host "⚠️ No SQL files found - check merge paths"
+        }
+        
+    - name: Restore NuGet packages
+      run: |
+        Write-Host "📦 Restoring NuGet packages..."
+        nuget restore
+        
+    - name: Build solution
+      run: |
+        Write-Host "🔨 Building solution..."
+        msbuild build/msbuild/build.proj /p:Configuration=Release /flp:LogFile=Build.log /verbosity:minimal
+        
+    - name: Check build output
+      run: |
+        Write-Host "📊 Build results:"
+        if (Test-Path "Build.log") {
+          Write-Host "Build log (last 20 lines):"
+          Get-Content "Build.log" | Select-Object -Last 20
+        }
+        
+        Write-Host "`n📁 Build output directories:"
+        Get-ChildItem -Recurse -Directory -Name "*Release*" | Select-Object -First 10
+        
+    - name: Deploy solution
+      run: |
+        Write-Host "🚀 Deploying solution..."
+        msbuild build/msbuild/deploy.proj /p:Configuration=Release /flp:LogFile=Deploy.log /verbosity:minimal
+        
+    - name: Prepare final artifacts
+      run: |
+        Write-Host "📦 Preparing deployment artifacts..."
+        
+        # Create deployment package structure
+        New-Item -ItemType Directory -Force -Path "deployment-package"
+        
+        # Copy build outputs
+        if (Test-Path "**/bin/Release") {
+          Copy-Item -Recurse "**/bin/Release" "deployment-package/" -Force
+        }
+        
+        # Copy configuration files
+        if (Test-Path "**/App_Data") {
+          Copy-Item -Recurse "**/App_Data" "deployment-package/" -Force  
+        }
+        
+        # Copy any web.config files
+        Get-ChildItem -Recurse -Name "web.config" | ForEach-Object {
+          $dest = "deployment-package/configs/" + (Split-Path $_ -Leaf)
+          New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+          Copy-Item $_ $dest -Force
+        }
+        
+        Write-Host "✅ Deployment package ready"
+        
+    - name: Upload build logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: build-logs
+        path: |
+          Build.log
+          Deploy.log
+        retention-days: 7
+        
+    - name: Upload deployment package
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-community-server-custom
+        path: |
+          deployment-package/
+          **/bin/Release/**
+        retention-days: 30
