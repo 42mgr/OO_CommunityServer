@@ -1,0 +1,355 @@
+name: Build Complete OnlyOffice .deb with Custom Modifications
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      force_download:
+        description: 'Force download fresh .deb package'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  extract-original-deb:
+    runs-on: ubuntu-latest
+    outputs:
+      deb-cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+    - name: Generate cache key for .deb
+      id: cache-key
+      run: |
+        # Create a cache key based on the week (updates weekly)
+        echo "key=onlyoffice-deb-extracted-$(date +%Y-W%U)" >> $GITHUB_OUTPUT
+        
+    - name: Check if extracted .deb is cached
+      id: cache-check
+      uses: actions/cache@v3
+      with:
+        path: deb-extracted
+        key: ${{ steps.cache-key.outputs.key }}
+        
+    - name: Download and extract original .deb
+      if: steps.cache-check.outputs.cache-hit != 'true' || github.event.inputs.force_download == 'true'
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # ───────── CONFIG ─────────
+        KEY_URL="https://download.onlyoffice.com/repo/onlyoffice.key"
+        REPO_BASE_URL="https://download.onlyoffice.com/repo/debian"
+        DIST="squeeze"
+        ARCH="amd64"
+        PACKAGE="onlyoffice-communityserver"
+        
+        # Download .deb
+        echo "📦 Downloading original .deb package..."
+        WORK_DIR=$(mktemp -d)
+        curl -fsSL "$KEY_URL" | gpg --dearmor > "$WORK_DIR/onlyoffice.gpg"
+        
+        INDEX_URL="$REPO_BASE_URL/dists/$DIST/main/binary-$ARCH/Packages.gz"
+        curl -fsSL "$INDEX_URL" | gzip -d > "$WORK_DIR/Packages"
+        
+        DEB_URL=$(awk -v pkg="$PACKAGE" '
+          $1 == "Package:" && $2 == pkg {found=1}
+          found && $1 == "Filename:" { print $2; exit }
+        ' "$WORK_DIR/Packages")
+        
+        FULL_URL="$REPO_BASE_URL/$DEB_URL"
+        curl -fsSL -o original.deb "$FULL_URL"
+        
+        echo "✅ Downloaded original.deb"
+        ls -lh original.deb
+        
+        # Extract .deb
+        echo "📦 Extracting original .deb..."
+        mkdir -p deb-extracted
+        cd deb-extracted
+        dpkg-deb -R ../original.deb .
+        
+        echo "✅ Extraction complete"
+        
+        # Create metadata file
+        echo "📝 Creating metadata..."
+        cat > .metadata << EOF
+        Extracted-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        Original-URL: $FULL_URL
+        Package-Name: $PACKAGE
+        EOF
+        
+        # Show extraction summary
+        echo "📊 Extraction summary:"
+        find . -maxdepth 3 -type d | head -20
+        echo "Total files: $(find . -type f | wc -l)"
+        
+        # Cleanup
+        rm -f ../original.deb
+        
+    - name: Display cache status
+      run: |
+        if [ "${{ steps.cache-check.outputs.cache-hit }}" == "true" ] && [ "${{ github.event.inputs.force_download }}" != "true" ]; then
+          echo "✅ Using cached .deb extraction"
+          if [ -f deb-extracted/.metadata ]; then
+            echo "📋 Cache metadata:"
+            cat deb-extracted/.metadata
+          fi
+        else
+          echo "🔄 Fresh .deb download and extraction completed"
+        fi
+        
+    - name: Upload extracted .deb
+      uses: actions/upload-artifact@v4
+      with:
+        name: deb-extracted
+        path: deb-extracted/
+        retention-days: 1
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 'lts/*'
+        
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.3.1
+      
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '5.0'
+        
+    - name: Restore NuGet packages
+      run: |
+        Write-Host "📦 Restoring NuGet packages..."
+        nuget restore
+        
+    - name: Build solution
+      run: |
+        Write-Host "🔨 Building solution..."
+        msbuild build/msbuild/build.proj /p:Configuration=Release /flp:LogFile=Build.log /verbosity:minimal
+        
+    - name: Deploy solution
+      run: |
+        Write-Host "🚀 Deploying solution..."
+        msbuild build/msbuild/deploy.proj /p:Configuration=Release /flp:LogFile=Deploy.log /verbosity:minimal
+        
+    - name: Collect modified DLLs
+      run: |
+        Write-Host "📦 Collecting modified assemblies..."
+        
+        # Create a directory for modified files
+        New-Item -ItemType Directory -Force -Path "modified-dlls"
+        
+        # Since you only modified ASC.Mail.dll
+        $targetFiles = @(
+          "ASC.Mail.dll",
+          "ASC.Mail.dll.config"  # Include config file if it exists
+        )
+        
+        foreach ($fileName in $targetFiles) {
+          Write-Host "Looking for $fileName..."
+          $found = Get-ChildItem -Recurse -Filter $fileName -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.Directory.Name -like "*Release*" -or $_.Directory.Name -eq "bin" } |
+                   Select-Object -First 1
+          
+          if ($found) {
+            Write-Host "✅ Found: $($found.FullName)"
+            Copy-Item $found.FullName "modified-dlls/"
+          } else {
+            Write-Host "⚠️ Not found: $fileName (this is OK if .config doesn't exist)"
+          }
+        }
+        
+        Write-Host "`n📊 Modified files collected:"
+        Get-ChildItem "modified-dlls" | Format-Table Name, Length -AutoSize
+        
+    - name: Upload modified DLLs
+      uses: actions/upload-artifact@v4
+      with:
+        name: modified-dlls
+        path: modified-dlls/
+        retention-days: 1
+
+  create-complete-deb:
+    needs: [extract-original-deb, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download extracted .deb
+      uses: actions/download-artifact@v4
+      with:
+        name: deb-extracted
+        path: deb-contents/
+        
+    - name: Download modified DLLs
+      uses: actions/download-artifact@v4
+      with:
+        name: modified-dlls
+        path: modified-dlls/
+        
+    - name: Display working directory contents
+      run: |
+        echo "📋 Working with:"
+        echo "Extracted .deb metadata:"
+        [ -f deb-contents/.metadata ] && cat deb-contents/.metadata || echo "No metadata found"
+        echo ""
+        echo "Modified files:"
+        ls -la modified-dlls/
+        
+    - name: Replace modified DLLs
+      run: |
+        echo "🔄 Replacing modified files..."
+        
+        cd deb-contents
+        
+        # For each modified file, find and replace all instances
+        for file in ../modified-dlls/*; do
+          file_name=$(basename "$file")
+          echo "Processing $file_name..."
+          
+          # Find all instances of this file in the package
+          find . -name "$file_name" -type f | while read -r target; do
+            echo "  Replacing: $target"
+            cp "$file" "$target"
+            # Preserve original permissions
+            chmod --reference="$target" "$file" 2>/dev/null || true
+          done
+        done
+        
+        echo "✅ File replacement complete"
+        
+    - name: Update package metadata
+      run: |
+        cd deb-contents
+        
+        # Update version to indicate custom build
+        if [ -f DEBIAN/control ]; then
+          # Get original version
+          ORIG_VERSION=$(grep "^Version:" DEBIAN/control | cut -d' ' -f2)
+          NEW_VERSION="${ORIG_VERSION}-custom-$(date +%Y%m%d)"
+          
+          echo "📝 Updating version from $ORIG_VERSION to $NEW_VERSION"
+          sed -i "s/^Version:.*/Version: $NEW_VERSION/" DEBIAN/control
+          
+          # Add a note about modifications
+          echo "" >> DEBIAN/control
+          echo "X-Custom-Build: true" >> DEBIAN/control
+          echo "X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> DEBIAN/control
+          echo "X-Modified-Components: ASC.Mail.dll" >> DEBIAN/control
+        fi
+        
+    - name: Rebuild .deb package
+      run: |
+        echo "📦 Building new .deb package..."
+        
+        # Fix permissions if needed
+        find deb-contents -type d -exec chmod 755 {} \;
+        find deb-contents/DEBIAN -type f -exec chmod 644 {} \;
+        [ -f deb-contents/DEBIAN/postinst ] && chmod 755 deb-contents/DEBIAN/postinst
+        [ -f deb-contents/DEBIAN/preinst ] && chmod 755 deb-contents/DEBIAN/preinst
+        [ -f deb-contents/DEBIAN/postrm ] && chmod 755 deb-contents/DEBIAN/postrm
+        [ -f deb-contents/DEBIAN/prerm ] && chmod 755 deb-contents/DEBIAN/prerm
+        
+        # Build the package
+        dpkg-deb -b deb-contents onlyoffice-communityserver-custom.deb
+        
+        echo "✅ Package built successfully"
+        ls -lh onlyoffice-communityserver-custom.deb
+        
+        # Verify package
+        echo "📋 Package info:"
+        dpkg-deb -I onlyoffice-communityserver-custom.deb
+        
+    - name: Test package integrity
+      run: |
+        echo "🔍 Testing package integrity..."
+        
+        # Check if package is valid
+        dpkg-deb -c onlyoffice-communityserver-custom.deb > /dev/null
+        echo "✅ Package structure is valid"
+        
+        # List some contents
+        echo "📦 Sample contents:"
+        dpkg-deb -c onlyoffice-communityserver-custom.deb | grep -E "(\.dll|\.exe|\.config)" | head -20
+        
+        # Check that our modifications are included
+        echo "🔍 Verifying modifications:"
+        for file in modified-dlls/*; do
+          file_name=$(basename "$file")
+          if dpkg-deb -c onlyoffice-communityserver-custom.deb | grep -q "$file_name"; then
+            echo "✅ Found modified: $file_name"
+          else
+            echo "❌ Missing: $file_name"
+          fi
+        done
+        
+    - name: Create installation test script
+      run: |
+        cat > test-install.sh << 'EOF'
+        #!/bin/bash
+        echo "📦 Testing .deb installation..."
+        
+        # Install dependencies first
+        apt-get update
+        apt-get install -y \
+          postgresql postgresql-client \
+          nginx \
+          mono-complete mono-fastcgi-server \
+          redis-server \
+          rabbitmq-server \
+          nodejs
+        
+        # Install the custom .deb
+        dpkg -i onlyoffice-communityserver-custom.deb || apt-get install -f -y
+        
+        echo "✅ Installation complete"
+        EOF
+        
+        chmod +x test-install.sh
+        
+    - name: Upload custom .deb
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-custom-deb
+        path: |
+          onlyoffice-communityserver-custom.deb
+          test-install.sh
+        retention-days: 30
+        
+    - name: Create Docker test file
+      run: |
+        cat > Dockerfile.test << 'EOF'
+        FROM ubuntu:20.04
+        
+        # Copy custom .deb
+        COPY onlyoffice-communityserver-custom.deb /tmp/
+        
+        # Install
+        RUN apt-get update && \
+            DEBIAN_FRONTEND=noninteractive apt-get install -y \
+              postgresql postgresql-client \
+              nginx \
+              mono-complete \
+              redis-server \
+              rabbitmq-server \
+              nodejs && \
+            dpkg -i /tmp/onlyoffice-communityserver-custom.deb || \
+            apt-get install -f -y && \
+            rm /tmp/onlyoffice-communityserver-custom.deb
+        
+        EXPOSE 80 443
+        
+        CMD ["/bin/bash"]
+        EOF
+        
+    - name: Upload Dockerfile
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-test-files
+        path: Dockerfile.test
+        retention-days: 7
