@@ -242,6 +242,12 @@ namespace ASC.Mail.Core.Engine
         {
             try
             {
+                // First check if this email is already linked to CRM
+                var existingCrmLinks = GetLinkedCrmEntitiesId(message.Id);
+                if (existingCrmLinks.Any()) {
+                    Log.DebugFormat("Message {0} is already linked to {1} CRM contact(s), skipping auto-processing", message.Id, existingCrmLinks.Count);
+                    return;
+                }
                 // Extract all email addresses from message
                 var allEmails = new List<string>();
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.From));
@@ -266,11 +272,15 @@ namespace ASC.Mail.Core.Engine
                             // Add existing contacts to link list
                             foreach (var contactId in existingContactIds)
                             {
-                                contactsToLink.Add(new CrmContactData
+                                // Avoid duplicate contacts in the link list
+                                if (!contactsToLink.Any(c => c.Id == contactId && c.Type == crmContactData.EntityTypes.Contact))
                                 {
-                                    Id = contactId,
-                                    Type = CrmContactData.EntityTypes.Contact
-                                });
+                                    contactsToLink.Add(new CrmContactData
+                                    {
+                                        Id = contactId,
+                                        Type = CrmContactData.EntityTypes.Contact
+                                    });
+                                }
                             }
                             Log.InfoFormat("Found existing CRM contact(s) for email {0}: {1}", email, string.Join(",", existingContactIds));
                         }
@@ -293,10 +303,11 @@ namespace ASC.Mail.Core.Engine
                 }
             }
             catch (Exception ex)
-            {                                                                                             Log.WarnFormat("ProcessIncomingEmailForCrm failed for message {0}: {1}", message.Id, ex.ToString());
+            {
+                Log.WarnFormat("ProcessIncomingEmailForCrm failed for message {0}: {1}", message.Id, ex.ToString());
             }
         }
-        
+
         public void AddRelationshipEvents(MailMessageData message, string httpContextScheme = null)
         {
             using (var scope = DIHelper.Resolve())
