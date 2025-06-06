@@ -23,12 +23,14 @@ using System.Linq;
 
 using ASC.Common.Logging;
 using ASC.CRM.Core;
+using ASC.CRM.Core.Entities;
 using ASC.Mail.Core.Dao.Expressions.Message;
 using ASC.Mail.Data.Contracts;
 using ASC.Mail.Data.Storage;
 using ASC.Mail.Exceptions;
 using ASC.Mail.Utils;
 using ASC.Web.CRM.Core;
+using ASC.Web.CRM.Core.Enums;
 
 using Autofac;
 
@@ -235,6 +237,66 @@ namespace ASC.Mail.Core.Engine
             }
         }
 
+
+        public void ProcessIncomingEmailForCrm(MailMessageData message, MailBoxData mailbox, string httpContextScheme)
+        {
+            try
+            {
+                // Extract all email addresses from message
+                var allEmails = new List<string>();
+                allEmails.AddRange(MailAddressHelper.ParseAddresses(message.From));
+                allEmails.AddRange(MailAddressHelper.ParseAddresses(message.To));
+                allEmails.AddRange(MailAddressHelper.ParseAddresses(message.Cc));
+
+                var contactsToLink = new List<CrmContactData>();
+
+                using (var daoFactory = new DaoFactory())
+                {
+                    var crmContactDao = daoFactory.CreateCrmContactDao(Tenant, User);
+
+                    foreach (var email in allEmails.Distinct())
+                    {
+                        if (string.IsNullOrEmpty(email)) continue;
+
+                        // Check if contact already exists
+                        var existingContactIds = crmContactDao.GetCrmContactIds(email);
+
+                        if (existingContactIds.Any())
+                        {
+                            // Add existing contacts to link list
+                            foreach (var contactId in existingContactIds)
+                            {
+                                contactsToLink.Add(new CrmContactData
+                                {
+                                    Id = contactId,
+                                    Type = CrmContactData.EntityTypes.Contact
+                                });
+                            }
+                            Log.InfoFormat("Found existing CRM contact(s) for email {0}: {1}", email, string.Join(",", existingContactIds));
+                        }
+                        else
+                        {
+                            Log.DebugFormat("No CRM contact found for email {0}, skipping", email);
+                        }
+                    }
+                }
+
+                // Link message to contacts if any were found
+                if (contactsToLink.Any())
+                {
+                    MarkChainAsCrmLinked(message.Id, contactsToLink);
+                    AddRelationshipEventForLinkedAccounts(mailbox, message, httpContextScheme);
+                    Log.InfoFormat("Linked message {0} to {1} CRM contact(s)", message.Id, contactsToLink.Count);
+                }                                                                                         else
+                {
+                    Log.DebugFormat("No CRM contacts found for message {0}, no linking performed", message.Id);
+                }
+            }
+            catch (Exception ex)
+            {                                                                                             Log.WarnFormat("ProcessIncomingEmailForCrm failed for message {0}: {1}", message.Id, ex.ToString());
+            }
+        }
+        
         public void AddRelationshipEvents(MailMessageData message, string httpContextScheme = null)
         {
             using (var scope = DIHelper.Resolve())
