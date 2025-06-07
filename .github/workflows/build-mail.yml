@@ -110,6 +110,18 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Fetch all history
+        
+    - name: Show git status
+      run: |
+        Write-Host "📍 Current branch and commit info:"
+        git branch -v
+        git log -1 --oneline
+        Write-Host "`n📋 Git status:"
+        git status
+        Write-Host "`n🔍 Recent commits:"
+        git log -5 --oneline
       
     - name: Set up Node.js
       uses: actions/setup-node@v4
