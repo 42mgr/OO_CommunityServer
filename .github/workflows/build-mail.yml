@@ -241,23 +241,33 @@ jobs:
         
         # Update version to indicate custom build
         if [ -f DEBIAN/control ]; then
+          echo "📋 Original control file:"
+          cat DEBIAN/control
+          echo ""
+          
           # Get original version
           ORIG_VERSION=$(grep "^Version:" DEBIAN/control | cut -d' ' -f2)
           NEW_VERSION="${ORIG_VERSION}-custom-$(date +%Y%m%d)"
           
           echo "📝 Updating version from $ORIG_VERSION to $NEW_VERSION"
-          sed -i "s/^Version:.*/Version: $NEW_VERSION/" DEBIAN/control
           
-          # Remove any existing custom fields first to prevent duplicates
-          sed -i '/^X-Custom-Build:/d' DEBIAN/control
-          sed -i '/^X-Build-Date:/d' DEBIAN/control
-          sed -i '/^X-Modified-Components:/d' DEBIAN/control
+          # Create a clean control file by filtering out any X- fields and ensuring no duplicates
+          grep -v "^X-Custom-Build:" DEBIAN/control | \
+          grep -v "^X-Build-Date:" | \
+          grep -v "^X-Modified-Components:" | \
+          sed "s/^Version:.*/Version: $NEW_VERSION/" > DEBIAN/control.tmp
           
-          # Add a note about modifications
-          echo "" >> DEBIAN/control
-          echo "X-Custom-Build: true" >> DEBIAN/control
-          echo "X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> DEBIAN/control
-          echo "X-Modified-Components: ASC.Mail.dll" >> DEBIAN/control
+          # Add custom fields to the clean file
+          echo "" >> DEBIAN/control.tmp
+          echo "X-Custom-Build: true" >> DEBIAN/control.tmp
+          echo "X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> DEBIAN/control.tmp
+          echo "X-Modified-Components: ASC.Mail.dll" >> DEBIAN/control.tmp
+          
+          # Replace original with clean version
+          mv DEBIAN/control.tmp DEBIAN/control
+          
+          echo "📋 Updated control file:"
+          cat DEBIAN/control
         fi
         
     - name: Rebuild .deb package
