@@ -282,13 +282,24 @@ jobs:
       run: |
         echo "📦 Building new .deb package..."
         
+        # Check current permissions
+        echo "📋 Current DEBIAN permissions:"
+        ls -la deb-contents/DEBIAN/
+        
         # Fix permissions if needed
         find deb-contents -type d -exec chmod 755 {} \;
         find deb-contents/DEBIAN -type f -exec chmod 644 {} \;
+        
+        # Make all maintainer scripts executable
         [ -f deb-contents/DEBIAN/postinst ] && chmod 755 deb-contents/DEBIAN/postinst
         [ -f deb-contents/DEBIAN/preinst ] && chmod 755 deb-contents/DEBIAN/preinst
         [ -f deb-contents/DEBIAN/postrm ] && chmod 755 deb-contents/DEBIAN/postrm
         [ -f deb-contents/DEBIAN/prerm ] && chmod 755 deb-contents/DEBIAN/prerm
+        [ -f deb-contents/DEBIAN/config ] && chmod 755 deb-contents/DEBIAN/config
+        [ -f deb-contents/DEBIAN/templates ] && chmod 644 deb-contents/DEBIAN/templates
+        
+        echo "📋 Fixed DEBIAN permissions:"
+        ls -la deb-contents/DEBIAN/
         
         # Build the package
         dpkg-deb -b deb-contents onlyoffice-communityserver-custom.deb
