@@ -1441,6 +1441,21 @@ catch (Exception ex)
 
             if (TrySaveMail(mailbox, message, folder, userFolderId, uidl, md5, log))
             {
+                // Auto-process incoming emails for CRM integration
+                if (message != null && message.Id > 0 && folder.Folder == FolderType.Inbox) 
+                {
+                    try 
+                    {
+                        var crmEngine = new CrmLinkEngine(mailbox.TenantId, mailbox.UserId, log);
+                        crmEngine.ProcessIncomingEmailForCrm(message, mailbox, null);
+                        log.InfoFormat("CRM auto-processing completed for message {0}", message.Id);
+                    }
+                    catch (Exception ex) 
+                    {
+                        log.WarnFormat("CRM auto-processing failed for message {0}: {1}", message.Id, ex.Message);
+                    }
+                }
+                
                 return message;
             }
 
