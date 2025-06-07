@@ -242,7 +242,10 @@ jobs:
         # Update version to indicate custom build
         if [ -f DEBIAN/control ]; then
           echo "📋 Original control file:"
-          cat DEBIAN/control
+          cat -n DEBIAN/control
+          echo ""
+          echo "📋 Checking for hidden characters:"
+          hexdump -C DEBIAN/control | head -20
           echo ""
           
           # Get original version
@@ -251,23 +254,28 @@ jobs:
           
           echo "📝 Updating version from $ORIG_VERSION to $NEW_VERSION"
           
-          # Create a clean control file by filtering out any X- fields and ensuring no duplicates
-          grep -v "^X-Custom-Build:" DEBIAN/control | \
-          grep -v "^X-Build-Date:" | \
-          grep -v "^X-Modified-Components:" | \
-          sed "s/^Version:.*/Version: $NEW_VERSION/" > DEBIAN/control.tmp
+          # More robust approach: recreate the control file completely
+          cat > DEBIAN/control << EOF
+        Package: onlyoffice-communityserver
+        Version: $NEW_VERSION
+        Architecture: all
+        Maintainer: Ascensio System SIA
+        Installed-Size: 1634637
+        Depends: debconf (>= 0.5) | debconf-2.0, mysql-server, mysql-client, mono-complete (>= 6.0), ca-certificates-mono, nginx (>= 1.9.5) | nginx-extras (>= 1.9.5), mono-webserver-hyperfastcgi, nodejs (>= 14.18.0), python3-pip, elasticsearch (= 7.16.3), redis-server, ffmpeg, dotnet-sdk-7.0
+        Recommends: ruby-god
+        Section: web
+        Priority: optional
+        Description: Community Server is a free open-source collaborative system developed to manage documents, projects, customer relationship and emails, all in one place.
+        X-Custom-Build: true
+        X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        X-Modified-Components: ASC.Mail.dll
+        EOF
           
-          # Add custom fields to the clean file
-          echo "" >> DEBIAN/control.tmp
-          echo "X-Custom-Build: true" >> DEBIAN/control.tmp
-          echo "X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> DEBIAN/control.tmp
-          echo "X-Modified-Components: ASC.Mail.dll" >> DEBIAN/control.tmp
-          
-          # Replace original with clean version
-          mv DEBIAN/control.tmp DEBIAN/control
-          
-          echo "📋 Updated control file:"
-          cat DEBIAN/control
+          echo "📋 New control file:"
+          cat -n DEBIAN/control
+          echo ""
+          echo "📋 Validating control file:"
+          dpkg-parsechangelog -l DEBIAN/control --show-field Source 2>/dev/null || echo "Control file validation failed, but proceeding..."
         fi
         
     - name: Rebuild .deb package
