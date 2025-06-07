@@ -273,7 +273,7 @@ namespace ASC.Mail.Core.Engine
                             foreach (var contactId in existingContactIds)
                             {
                                 // Avoid duplicate contacts in the link list
-                                if (!contactsToLink.Any(c => c.Id == contactId && c.Type == crmContactData.EntityTypes.Contact))
+                                if (!contactsToLink.Any(c => c.Id == contactId && c.Type == CrmContactData.EntityTypes.Contact))
                                 {
                                     contactsToLink.Add(new CrmContactData
                                     {

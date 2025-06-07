@@ -349,7 +349,7 @@ namespace ASC.Mail.Core.Engine
 
                         // Auto-match and link sent emails to existing CRM contacts
                         try {
-                            factory.CrmLinkEngine.ProcessIncomingEmailForCrm(message, darft.Mailbox, scheme);
+                            factory.CrmLinkEngine.ProcessIncomingEmailForCrm(message, draft.Mailbox, scheme);
                         } catch (Exception ex) {
                             Log.WarnFormat("CRM auto-processing failed for sent message {0}: {1}", message.Id, ex.Message);
                         }
