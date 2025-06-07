@@ -248,6 +248,11 @@ jobs:
           echo "📝 Updating version from $ORIG_VERSION to $NEW_VERSION"
           sed -i "s/^Version:.*/Version: $NEW_VERSION/" DEBIAN/control
           
+          # Remove any existing custom fields first to prevent duplicates
+          sed -i '/^X-Custom-Build:/d' DEBIAN/control
+          sed -i '/^X-Build-Date:/d' DEBIAN/control
+          sed -i '/^X-Modified-Components:/d' DEBIAN/control
+          
           # Add a note about modifications
           echo "" >> DEBIAN/control
           echo "X-Custom-Build: true" >> DEBIAN/control
