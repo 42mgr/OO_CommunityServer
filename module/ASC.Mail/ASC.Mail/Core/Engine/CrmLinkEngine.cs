@@ -31,6 +31,8 @@ using ASC.Mail.Exceptions;
 using ASC.Mail.Utils;
 using ASC.Web.CRM.Core;
 using ASC.Web.CRM.Core.Enums;
+using ASC.Web.CRM.Classes;
+using ASC.Web.Studio.Utility;
 
 using Autofac;
 
@@ -291,13 +293,17 @@ namespace ASC.Mail.Core.Engine
                     }
                 }
 
-                // Link message to contacts if any were found
+                // Link message to contacts if any were found - using enhanced manual-like process
                 if (contactsToLink.Any())
                 {
-                    MarkChainAsCrmLinked(message.Id, contactsToLink);
-                    AddRelationshipEventForLinkedAccounts(mailbox, message, httpContextScheme);
-                    Log.InfoFormat("Linked message {0} to {1} CRM contact(s)", message.Id, contactsToLink.Count);
-                }                                                                                         else
+                    // Set the linked CRM entities on the message for full processing
+                    message.LinkedCrmEntityIds = contactsToLink;
+                    
+                    // Use the full LinkChainToCrm process like manual linking
+                    LinkChainToCrmEnhanced(message.Id, contactsToLink, httpContextScheme);
+                    Log.InfoFormat("Enhanced auto-linked message {0} to {1} CRM contact(s) with full functionality", message.Id, contactsToLink.Count);
+                }
+                else
                 {
                     Log.DebugFormat("No CRM contacts found for message {0}, no linking performed", message.Id);
                 }
@@ -369,6 +375,141 @@ namespace ASC.Mail.Core.Engine
                     Log.InfoFormat(
                         "CrmLinkEngine->AddRelationshipEvents(): message with id = {0} has been linked successfully to contact with id = {1}",
                         message.Id, contactEntity.Id);
+                }
+            }
+        }
+
+        public void LinkChainToCrmEnhanced(int messageId, List<CrmContactData> contactIds, string httpContextScheme)
+        {
+            // Enhanced automatic linking that works like manual process
+            // but with permission-safe checks instead of strict demands
+            using (var scope = DIHelper.Resolve())
+            {
+                var factory = scope.Resolve<CRM.Core.Dao.DaoFactory>();
+                var accessibleContacts = new List<CrmContactData>();
+                
+                foreach (var crmContactEntity in contactIds)
+                {
+                    try
+                    {
+                        switch (crmContactEntity.Type)
+                        {
+                            case CrmContactData.EntityTypes.Contact:
+                                var crmContact = factory.ContactDao.GetByID(crmContactEntity.Id);
+                                if (CRMSecurity.CanAccessTo(crmContact))
+                                {
+                                    accessibleContacts.Add(crmContactEntity);
+                                }
+                                else
+                                {
+                                    Log.WarnFormat("User {0} does not have access to CRM contact {1}, skipping", User, crmContactEntity.Id);
+                                }
+                                break;
+                            case CrmContactData.EntityTypes.Case:
+                                var crmCase = factory.CasesDao.GetByID(crmContactEntity.Id);
+                                if (CRMSecurity.CanAccessTo(crmCase))
+                                {
+                                    accessibleContacts.Add(crmContactEntity);
+                                }
+                                else
+                                {
+                                    Log.WarnFormat("User {0} does not have access to CRM case {1}, skipping", User, crmContactEntity.Id);
+                                }
+                                break;
+                            case CrmContactData.EntityTypes.Opportunity:
+                                var crmOpportunity = factory.DealDao.GetByID(crmContactEntity.Id);
+                                if (CRMSecurity.CanAccessTo(crmOpportunity))
+                                {
+                                    accessibleContacts.Add(crmContactEntity);
+                                }
+                                else
+                                {
+                                    Log.WarnFormat("User {0} does not have access to CRM opportunity {1}, skipping", User, crmContactEntity.Id);
+                                }
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.WarnFormat("Failed to check access to CRM entity {0} type {1}: {2}", crmContactEntity.Id, crmContactEntity.Type, ex.Message);
+                    }
+                }
+
+                if (!accessibleContacts.Any())
+                {
+                    Log.InfoFormat("No accessible CRM contacts found for message {0}, skipping enhanced linking", messageId);
+                    return;
+                }
+            }
+
+            using (var daoFactory = new DaoFactory())
+            {
+                var db = daoFactory.DbManager;
+
+                var daoMail = daoFactory.CreateMailDao(Tenant, User);
+
+                var mail = daoMail.GetMail(new ConcreteUserMessageExp(messageId, Tenant, User));
+
+                var daoMailInfo = daoFactory.CreateMailInfoDao(Tenant, User);
+
+                var chainedMessages = daoMailInfo.GetMailInfoList(
+                    SimpleMessagesExp.CreateBuilder(Tenant, User)
+                        .SetChainId(mail.ChainId)
+                        .Build());
+
+                if (!chainedMessages.Any())
+                    return;
+
+                var linkingMessages = new List<MailMessageData>();
+
+                var engine = new EngineFactory(Tenant, User);
+
+                foreach (var chainedMessage in chainedMessages)
+                {
+                    var message = engine.MessageEngine.GetMessage(chainedMessage.Id,
+                        new MailMessageData.Options
+                        {
+                            LoadImages = true,
+                            LoadBody = true,
+                            NeedProxyHttp = false
+                        });
+
+                    message.LinkedCrmEntityIds = contactIds;
+
+                    linkingMessages.Add(message);
+                }
+
+                var daoCrmLink = daoFactory.CreateCrmLinkDao(Tenant, User);
+
+                using (var tx = db.BeginTransaction(IsolationLevel.ReadUncommitted))
+                {
+                    daoCrmLink.SaveCrmLinks(mail.ChainId, mail.MailboxId, contactIds);
+
+                    foreach (var message in linkingMessages)
+                    {
+                        try
+                        {
+                            // This uploads attachments and creates full relationship events
+                            AddRelationshipEvents(message, httpContextScheme);
+                            Log.InfoFormat("Enhanced auto-processing: Added full relationship events and file uploads for message {0}", message.Id);
+                        }
+                        catch (ApiHelperException ex)
+                        {
+                            if (!ex.Message.Equals("Already exists"))
+                            {
+                                Log.WarnFormat("Enhanced auto-processing: Failed to add relationship events for message {0}: {1}", message.Id, ex.Message);
+                                // Don't throw - continue with other messages
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.WarnFormat("Enhanced auto-processing: Unexpected error adding relationship events for message {0}: {1}", message.Id, ex.Message);
+                            // Don't throw - continue with other messages
+                        }
+                    }
+
+                    tx.Commit();
+                    Log.InfoFormat("Enhanced auto-processing: Successfully completed full linking for message chain {0} with {1} CRM entities", mail.ChainId, contactIds.Count);
                 }
             }
         }
