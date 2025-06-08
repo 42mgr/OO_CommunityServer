@@ -1441,9 +1441,12 @@ catch (Exception ex)
 
             if (TrySaveMail(mailbox, message, folder, userFolderId, uidl, md5, log))
             {
+                log.InfoFormat("DEBUG: MailSave successful - message.Id={0}, folder.Folder={1}, checking CRM conditions", message != null ? message.Id : -1, folder.Folder);
+                
                 // Auto-process incoming emails for CRM integration
                 if (message != null && message.Id > 0 && folder.Folder == FolderType.Inbox) 
                 {
+                    log.InfoFormat("DEBUG: CRM conditions met - starting auto-processing for message {0}", message.Id);
                     try 
                     {
                         var crmEngine = new CrmLinkEngine(mailbox.TenantId, mailbox.UserId, log);
@@ -1454,6 +1457,11 @@ catch (Exception ex)
                     {
                         log.WarnFormat("CRM auto-processing failed for message {0}: {1}", message.Id, ex.Message);
                     }
+                }
+                else 
+                {
+                    log.InfoFormat("DEBUG: CRM conditions NOT met - message.Id={0}, folder.Folder={1} (Inbox={2})", 
+                        message != null ? message.Id : -1, folder.Folder, FolderType.Inbox);
                 }
                 
                 return message;

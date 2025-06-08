@@ -70,14 +70,6 @@ namespace ASC.Mail.Core.Engine
                         }
                     }
                 }
-                // Auto-match and create CRM contacts for incoming emails
-                try {
-                         var crmEngine = new CrmLinkEngine(mailbox.TenantId, mailbox.UserId, Log);
-                crmEngine.ProcessIncomingEmailForCrm(message, mailbox, httpContextScheme);
-                }
-                catch (Exception ex) {
-                    Log.WarnFormat("CRM auto-processing failed for message {0}: {1}", message.Id, ex.Message);
-                }
             }
             catch (Exception e)
             {
