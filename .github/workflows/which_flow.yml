@@ -13,7 +13,7 @@ jobs:
           try {
             // Check if repo exists and is accessible
             const repo = await github.rest.repos.get({
-              owner: 'mgr42',
+              owner: '42mgr',
               repo: 'OO_Docker-CommunityServer'
             });
             console.log('Repository found:', repo.data.name);
@@ -33,7 +33,7 @@ jobs:
             
             // Try to trigger the workflow
             await github.rest.actions.createWorkflowDispatch({
-              owner: 'mgr42',
+              owner: '42mgr',
               repo: 'OO_Docker-CommunityServer',
               workflow_id: 'build-docker.yml',
               ref: repo.data.default_branch
