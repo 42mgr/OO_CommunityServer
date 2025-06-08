@@ -342,13 +342,12 @@ jobs:
           onlyoffice-communityserver-custom.deb
         retention-days: 4
         
-    - name: Create Release and Upload .deb
+    - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: build-${{ github.run_number }}
+        tag_name: build-1.0.${{ github.run_number }}
         name: Custom Build ${{ github.run_number }}
-        files: |
-          onlyoffice-communityserver-custom.deb
+        files: onlyoffice-communityserver-custom.deb
 
     - uses: Nats-ji/delete-old-releases@v1
       with:
@@ -356,17 +355,14 @@ jobs:
         keep-count: 2
         keep-old-minor-releases: false
 
-    - name: Trigger workflow in another repo
-      env:
-        # Restrict PAT scope to only required repositories
-        PAT_SCOPE: "repo=target-repo-name workflow"
-      run: |
-        curl -X POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          https://api.github.com/repos/<OWNER>/<TARGET_REPO>/dispatches \
-          -d '{"event_type":"custom-release-trigger"}'
-
-
-
+    - name: Trigger Target Workflow
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.PAT_TOKEN }}
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: 'mgr42',
+            repo: 'OO_Docker-CommunityServer',
+            workflow_id: 'build-docker.yml',
+            ref: 'master'
+          })
