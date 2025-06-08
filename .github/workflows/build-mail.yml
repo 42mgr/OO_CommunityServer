@@ -161,7 +161,9 @@ jobs:
         # Since you only modified ASC.Mail.dll
         $targetFiles = @(
           "ASC.Mail.dll",
-          "ASC.Mail.dll.config"  # Include config file if it exists
+          "ASC.Mail.dll.config",  # Include config file if it exists
+          "ASC.Mail.Core.dll",
+          "ASC.Mail.Aggregator.Service.dll"
         )
         
         foreach ($fileName in $targetFiles) {
