@@ -349,12 +349,13 @@ jobs:
         name: Custom Build ${{ github.run_number }}
         files: onlyoffice-communityserver-custom.deb
 
-    - uses: Nats-ji/delete-old-releases@v1
+    - uses: dev-drprasad/delete-older-releases@v0.3.4
       with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        keep-count: 2
-        keep-old-minor-releases: false
-
+        repo: ${{ github.repository }}
+        keep_latest: 2
+        delete_tag_pattern: build-
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Trigger Target Workflow
       uses: actions/github-script@v6
       with:
