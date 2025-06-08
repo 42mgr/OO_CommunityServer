@@ -354,8 +354,9 @@ jobs:
         repo: ${{ github.repository }}
         keep_latest: 2
         delete_tag_pattern: build-
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Trigger Target Workflow
       uses: actions/github-script@v6
       with:
