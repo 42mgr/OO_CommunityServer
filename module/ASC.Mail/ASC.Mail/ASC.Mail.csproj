@@ -58,6 +58,8 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <UseVSHostingProcess>false</UseVSHostingProcess>
     <Prefer32Bit>false</Prefer32Bit>
+    <DocumentationFile>..\\..\\..\\web\\studio\\ASC.Web.Studio\\bin\\ASC.Mail.xml</DocumentationFile>
+    <NoWarn>CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Authorization\AuthorizationServiceType.cs" />
@@ -592,7 +594,7 @@
   <PropertyGroup>
     <PostBuildEvent>
       copy "$(TargetPath)" "$(TargetDir)ASC.Mail.Core.dll"
-      copy "$(TargetDir)$(TargetName).xml" "$(TargetDir)ASC.Mail.Core.xml" 2>nul
+      if exist "$(TargetDir)$(TargetName).xml" copy "$(TargetDir)$(TargetName).xml" "$(TargetDir)ASC.Mail.Core.xml"
       echo Enhanced ASC.Mail.Core.dll created with CRM auto-linking functionality
     </PostBuildEvent>
   </PropertyGroup>
