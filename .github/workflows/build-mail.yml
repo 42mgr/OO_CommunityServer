@@ -158,12 +158,12 @@ jobs:
         # Create a directory for modified files
         New-Item -ItemType Directory -Force -Path "modified-dlls"
         
-        # Since you only modified ASC.Mail.dll
+        # Collect both ASC.Mail.dll and the generated ASC.Mail.Core.dll
         $targetFiles = @(
           "ASC.Mail.dll",
-          "ASC.Mail.dll.config",  # Include config file if it exists
           "ASC.Mail.Core.dll",
-          "ASC.Mail.Aggregator.Service.dll"
+          "ASC.Mail.xml",
+          "ASC.Mail.Core.xml"
         )
         
         foreach ($fileName in $targetFiles) {
@@ -182,6 +182,25 @@ jobs:
         
         Write-Host "`n📊 Modified files collected:"
         Get-ChildItem "modified-dlls" | Format-Table Name, Length -AutoSize
+        
+        # Verify ASC.Mail.Core.dll was generated
+        if (Test-Path "modified-dlls/ASC.Mail.Core.dll") {
+          Write-Host "✅ ASC.Mail.Core.dll successfully generated from post-build event"
+          $mailDll = Get-Item "modified-dlls/ASC.Mail.dll" -ErrorAction SilentlyContinue
+          $coresDll = Get-Item "modified-dlls/ASC.Mail.Core.dll" -ErrorAction SilentlyContinue
+          if ($mailDll -and $coresDll) {
+            Write-Host "📊 Size comparison:"
+            Write-Host "   ASC.Mail.dll:      $($mailDll.Length) bytes"
+            Write-Host "   ASC.Mail.Core.dll: $($coresDll.Length) bytes"
+            if ($mailDll.Length -eq $coresDll.Length) {
+              Write-Host "✅ Files are identical (as expected)"
+            } else {
+              Write-Host "⚠️ File sizes differ - this may be normal"
+            }
+          }
+        } else {
+          Write-Host "❌ ASC.Mail.Core.dll was not generated! Check post-build event."
+        }
         
     - name: Upload modified DLLs
       uses: actions/upload-artifact@v4
@@ -270,7 +289,7 @@ jobs:
         Description: Community Server is a free open-source collaborative system developed to manage documents, projects, customer relationship and emails, all in one place.
         X-Custom-Build: true
         X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        X-Modified-Components: ASC.Mail.dll
+        X-Modified-Components: ASC.Mail.dll, ASC.Mail.Core.dll (enhanced CRM auto-linking)
         EOF
           
           echo "📋 New control file:"
