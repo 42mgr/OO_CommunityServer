@@ -1164,48 +1164,6 @@ namespace ASC.Mail.Core.Engine
                     engine.UserFolderEngine.SetFolderMessages(daoFactory, userFolderId.Value, new List<int> { mailId });
                 }
             }
-// Start
-try
-{
-    var crmLinkEngine = new CrmLinkEngine(mailbox.TenantId, mailbox.UserId, Log);
-    var crmDao = daoFactory.CreateCrmContactDao(mailbox.TenantId, mailbox.UserId);
-
-    // Collect all participant emails
-    var allAddresses = new List<string>();
-    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.From));
-    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.To));
-    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.Cc));
-    allAddresses.AddRange(MailAddressHelper.ParseAddresses(message.Bcc));
-
-
-    // Deduplicate
-    allAddresses = allAddresses
-        .Where(addr => !string.IsNullOrWhiteSpace(addr))
-        .Select(addr => addr.ToLowerInvariant())
-        .Distinct()
-        .ToList();
-
-    // Fetch CRM contacts by email
-    var matchedContacts = crmDao.GetContactsByEmails(allAddresses);
-
-    if (matchedContacts.Any())
-    {
-        var crmContactData = matchedContacts.Select(c => new CrmContactData
-        {
-            Id = c.ID,
-            Type = CrmContactData.EntityTypes.Contact
-            }).ToList();
-
-        crmLinkEngine.LinkChainToCrm(mailId,crmContactData, "http"); // or https 
-    }
-}
-catch (Exception ex)
-{
-  Log.Warn($"CRM linking failed for mailId={mailId}", ex);
-}
-
-
-// End
             if (saveAttachments &&
                 message.Attachments != null &&
                 message.Attachments.Count > 0)
