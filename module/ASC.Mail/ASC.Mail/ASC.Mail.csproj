@@ -591,6 +591,9 @@
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
     <PostBuildEvent>
+      copy "$(TargetPath)" "$(TargetDir)ASC.Mail.Core.dll"
+      copy "$(TargetDir)$(TargetName).xml" "$(TargetDir)ASC.Mail.Core.xml" 2>nul
+      echo Enhanced ASC.Mail.Core.dll created with CRM auto-linking functionality
     </PostBuildEvent>
   </PropertyGroup>
 </Project>
