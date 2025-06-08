@@ -1,39 +1,46 @@
-- name: Debug and Trigger Workflow
-  uses: actions/github-script@v6
-  with:
-    github-token: ${{ secrets.PAT_TOKEN }}
-    script: |
-      try {
-        // Check if repo exists and is accessible
-        const repo = await github.rest.repos.get({
-          owner: 'mgr42',
-          repo: 'OO_Docker-CommunityServer'
-        });
-        console.log('Repository found:', repo.data.name);
-        
-        // List all workflows
-        const workflows = await github.rest.actions.listRepoWorkflows({
-          owner: 'mgr42',
-          repo: 'OO_Docker-CommunityServer'
-        });
-        console.log('Available workflows:');
-        workflows.data.workflows.forEach(w => {
-          console.log(`- ID: ${w.id}, Name: ${w.name}, Path: ${w.path}`);
-        });
-        
-        // Check default branch
-        console.log('Default branch:', repo.data.default_branch);
-        
-        // Try to trigger the workflow
-        await github.rest.actions.createWorkflowDispatch({
-          owner: 'mgr42',
-          repo: 'OO_Docker-CommunityServer',
-          workflow_id: 'build-docker.yml',
-          ref: repo.data.default_branch
-        });
-        console.log('Workflow triggered successfully!');
-        
-      } catch (error) {
-        console.error('Error details:', error.message);
-        console.error('Status:', error.status);
-      }
+name: Debug
+on: 
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Debug and Trigger Workflow
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.PAT_TOKEN }}
+        script: |
+          try {
+            // Check if repo exists and is accessible
+            const repo = await github.rest.repos.get({
+              owner: 'mgr42',
+              repo: 'OO_Docker-CommunityServer'
+            });
+            console.log('Repository found:', repo.data.name);
+            
+            // List all workflows
+            const workflows = await github.rest.actions.listRepoWorkflows({
+              owner: 'mgr42',
+              repo: 'OO_Docker-CommunityServer'
+            });
+            console.log('Available workflows:');
+            workflows.data.workflows.forEach(w => {
+              console.log(`- ID: ${w.id}, Name: ${w.name}, Path: ${w.path}`);
+            });
+            
+            // Check default branch
+            console.log('Default branch:', repo.data.default_branch);
+            
+            // Try to trigger the workflow
+            await github.rest.actions.createWorkflowDispatch({
+              owner: 'mgr42',
+              repo: 'OO_Docker-CommunityServer',
+              workflow_id: 'build-docker.yml',
+              ref: repo.data.default_branch
+            });
+            console.log('Workflow triggered successfully!');
+            
+          } catch (error) {
+            console.error('Error details:', error.message);
+            console.error('Status:', error.status);
+          }
