@@ -242,19 +242,25 @@ namespace ASC.Mail.Core.Engine
 
         public void ProcessIncomingEmailForCrm(MailMessageData message, MailBoxData mailbox, string httpContextScheme)
         {
+            Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - METHOD CALLED for message {0} from {1} to {2}", message.Id, message.From, message.To);
+            
             try
             {
                 // First check if this email is already linked to CRM
                 var existingCrmLinks = GetLinkedCrmEntitiesId(message.Id);
                 if (existingCrmLinks.Any()) {
-                    Log.DebugFormat("Message {0} is already linked to {1} CRM contact(s), skipping auto-processing", message.Id, existingCrmLinks.Count);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Message {0} is already linked to {1} CRM contact(s), skipping auto-processing", message.Id, existingCrmLinks.Count);
                     return;
                 }
+                
+                Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - No existing CRM links found for message {0}, proceeding with contact search", message.Id);
                 // Extract all email addresses from message
                 var allEmails = new List<string>();
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.From));
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.To));
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.Cc));
+
+                Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Extracted {0} email addresses: {1}", allEmails.Count, string.Join(", ", allEmails));
 
                 var contactsToLink = new List<CrmContactData>();
 
@@ -296,16 +302,21 @@ namespace ASC.Mail.Core.Engine
                 // Link message to contacts if any were found - using enhanced manual-like process
                 if (contactsToLink.Any())
                 {
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Found {0} CRM contacts to link for message {1}: {2}", 
+                        contactsToLink.Count, message.Id, string.Join(",", contactsToLink.Select(c => $"ID:{c.Id} Type:{c.Type}")));
+                    
                     // Set the linked CRM entities on the message for full processing
                     message.LinkedCrmEntityIds = contactsToLink;
                     
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - About to call LinkChainToCrmEnhanced for message {0}", message.Id);
+                    
                     // Use the full LinkChainToCrm process like manual linking
                     LinkChainToCrmEnhanced(message.Id, contactsToLink, httpContextScheme);
-                    Log.InfoFormat("Enhanced auto-linked message {0} to {1} CRM contact(s) with full functionality", message.Id, contactsToLink.Count);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Enhanced auto-linked message {0} to {1} CRM contact(s) with full functionality", message.Id, contactsToLink.Count);
                 }
                 else
                 {
-                    Log.DebugFormat("No CRM contacts found for message {0}, no linking performed", message.Id);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - No CRM contacts found for message {0}, no linking performed", message.Id);
                 }
             }
             catch (Exception ex)
@@ -381,10 +392,13 @@ namespace ASC.Mail.Core.Engine
 
         public void LinkChainToCrmEnhanced(int messageId, List<CrmContactData> contactIds, string httpContextScheme)
         {
+            Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Starting enhanced linking for message {0} with {1} contacts", messageId, contactIds.Count);
+            
             // Enhanced automatic linking that works like manual process
             // but with permission-safe checks instead of strict demands
             using (var scope = DIHelper.Resolve())
             {
+                Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - DIHelper scope resolved, checking contact permissions");
                 var factory = scope.Resolve<CRM.Core.Dao.DaoFactory>();
                 var accessibleContacts = new List<CrmContactData>();
                 
@@ -481,35 +495,43 @@ namespace ASC.Mail.Core.Engine
 
                 var daoCrmLink = daoFactory.CreateCrmLinkDao(Tenant, User);
 
+                Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - About to begin database transaction for chain {0} with {1} contacts", mail.ChainId, contactIds.Count);
+                
                 using (var tx = db.BeginTransaction(IsolationLevel.ReadUncommitted))
                 {
+                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Transaction started, calling SaveCrmLinks for chain {0}, mailbox {1}", mail.ChainId, mail.MailboxId);
+                    
                     daoCrmLink.SaveCrmLinks(mail.ChainId, mail.MailboxId, contactIds);
+                    
+                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - SaveCrmLinks completed successfully, processing {0} messages for relationship events", linkingMessages.Count);
 
                     foreach (var message in linkingMessages)
                     {
                         try
                         {
+                            Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Adding relationship events for message {0}", message.Id);
                             // This uploads attachments and creates full relationship events
                             AddRelationshipEvents(message, httpContextScheme);
-                            Log.InfoFormat("Enhanced auto-processing: Added full relationship events and file uploads for message {0}", message.Id);
+                            Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Successfully added relationship events for message {0}", message.Id);
                         }
                         catch (ApiHelperException ex)
                         {
                             if (!ex.Message.Equals("Already exists"))
                             {
-                                Log.WarnFormat("Enhanced auto-processing: Failed to add relationship events for message {0}: {1}", message.Id, ex.Message);
+                                Log.WarnFormat("DEBUG: LinkChainToCrmEnhanced - ApiHelperException for message {0}: {1}", message.Id, ex.Message);
                                 // Don't throw - continue with other messages
                             }
                         }
                         catch (Exception ex)
                         {
-                            Log.WarnFormat("Enhanced auto-processing: Unexpected error adding relationship events for message {0}: {1}", message.Id, ex.Message);
+                            Log.WarnFormat("DEBUG: LinkChainToCrmEnhanced - Unexpected error adding relationship events for message {0}: {1}", message.Id, ex.Message);
                             // Don't throw - continue with other messages
                         }
                     }
 
+                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - About to commit transaction for chain {0}", mail.ChainId);
                     tx.Commit();
-                    Log.InfoFormat("Enhanced auto-processing: Successfully completed full linking for message chain {0} with {1} CRM entities", mail.ChainId, contactIds.Count);
+                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Transaction committed successfully for chain {0} with {1} CRM entities", mail.ChainId, contactIds.Count);
                 }
             }
         }
