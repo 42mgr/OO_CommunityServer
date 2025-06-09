@@ -153,17 +153,17 @@ jobs:
         
     - name: Collect modified DLLs
       run: |
-        Write-Host "📦 Collecting modified assemblies..."
+        Write-Host "📦 Collecting modified assemblies with enhanced CRM auto-linking..."
         
         # Create a directory for modified files
         New-Item -ItemType Directory -Force -Path "modified-dlls"
         
-        # Collect both ASC.Mail.dll and the generated ASC.Mail.Core.dll
+        # Collect web studio DLL with CRM service and mail DLL (no more copying to core)
         $targetFiles = @(
+          "ASC.Web.Studio.dll",
           "ASC.Mail.dll",
-          "ASC.Mail.Core.dll",
-          "ASC.Mail.xml",
-          "ASC.Mail.Core.xml"
+          "ASC.Web.Studio.xml",
+          "ASC.Mail.xml"
         )
         
         foreach ($fileName in $targetFiles) {
@@ -176,30 +176,24 @@ jobs:
             Write-Host "✅ Found: $($found.FullName)"
             Copy-Item $found.FullName "modified-dlls/"
           } else {
-            Write-Host "⚠️ Not found: $fileName (this is OK if .config doesn't exist)"
+            Write-Host "⚠️ Not found: $fileName"
           }
         }
         
         Write-Host "`n📊 Modified files collected:"
         Get-ChildItem "modified-dlls" | Format-Table Name, Length -AutoSize
         
-        # Verify ASC.Mail.Core.dll was generated
-        if (Test-Path "modified-dlls/ASC.Mail.Core.dll") {
-          Write-Host "✅ ASC.Mail.Core.dll successfully generated from post-build event"
-          $mailDll = Get-Item "modified-dlls/ASC.Mail.dll" -ErrorAction SilentlyContinue
-          $coresDll = Get-Item "modified-dlls/ASC.Mail.Core.dll" -ErrorAction SilentlyContinue
-          if ($mailDll -and $coresDll) {
-            Write-Host "📊 Size comparison:"
-            Write-Host "   ASC.Mail.dll:      $($mailDll.Length) bytes"
-            Write-Host "   ASC.Mail.Core.dll: $($coresDll.Length) bytes"
-            if ($mailDll.Length -eq $coresDll.Length) {
-              Write-Host "✅ Files are identical (as expected)"
-            } else {
-              Write-Host "⚠️ File sizes differ - this may be normal"
-            }
-          }
+        # Verify CRM auto-linking components
+        if (Test-Path "modified-dlls/ASC.Web.Studio.dll") {
+          Write-Host "✅ ASC.Web.Studio.dll with CRM Email Auto-Link Service collected"
         } else {
-          Write-Host "❌ ASC.Mail.Core.dll was not generated! Check post-build event."
+          Write-Host "❌ ASC.Web.Studio.dll not found - CRM service may not be included"
+        }
+        
+        if (Test-Path "modified-dlls/ASC.Mail.dll") {
+          Write-Host "✅ ASC.Mail.dll with enhanced CRM functionality collected"
+        } else {
+          Write-Host "❌ ASC.Mail.dll not found"
         }
         
     - name: Upload modified DLLs
@@ -289,7 +283,7 @@ jobs:
         Description: Community Server is a free open-source collaborative system developed to manage documents, projects, customer relationship and emails, all in one place.
         X-Custom-Build: true
         X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        X-Modified-Components: ASC.Mail.dll, ASC.Mail.Core.dll (enhanced CRM auto-linking)
+        X-Modified-Components: ASC.Web.Studio.dll (CRM Email Auto-Link Service), ASC.Mail.dll (enhanced CRM functionality)
         EOF
           
           echo "📋 New control file:"

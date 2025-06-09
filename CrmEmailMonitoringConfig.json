@@ -1,0 +1,30 @@
+{
+  "CrmEmailMonitoring": {
+    "Enabled": true,
+    "MonitoringIntervalSeconds": 30,
+    "BatchSize": 100,
+    "StartupDelaySeconds": 30,
+    "DatabaseConnection": {
+      "Server": "localhost",
+      "Port": 3306,
+      "Database": "onlyoffice",
+      "Username": "onlyoffice_user",
+      "Password": "onlyoffice_pass",
+      "CharSet": "utf8",
+      "ConnectionTimeout": 30,
+      "CommandTimeout": 60
+    },
+    "Logging": {
+      "LogLevel": "Info",
+      "LogToFile": true,
+      "LogFilePath": "/var/log/onlyoffice/crm-email-monitoring.log"
+    },
+    "Features": {
+      "ProcessInboxEmails": true,
+      "ProcessSentEmails": true,
+      "CreateNoMatchEvents": true,
+      "UpdateChainStatus": true,
+      "EnableDetailedLogging": false
+    }
+  }
+}

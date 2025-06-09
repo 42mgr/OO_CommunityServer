@@ -114,6 +114,17 @@ namespace ASC.Web.Studio
             {
                 LogManager.GetLogger("ASC").Error("Start Warmup", ex);
             }
+
+            // Initialize CRM Email Auto-Linking Service
+            try
+            {
+                CrmEmailAutoLinkService.Start();
+                LogManager.GetLogger("ASC").Info("CRM Email Auto-Link Service started successfully");
+            }
+            catch (Exception ex)
+            {
+                LogManager.GetLogger("ASC").Error("Failed to start CRM Email Auto-Link Service", ex);
+            }
         }
 
 

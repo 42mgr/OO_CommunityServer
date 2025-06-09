@@ -394,5 +394,18 @@ namespace ASC.Web.Studio
 
             Response.Redirect(url, true);
         }
+
+        protected void Application_End(object sender, EventArgs e)
+        {
+            try
+            {
+                LogManager.GetLogger("ASC").Info("Application ending - stopping CRM Email Auto-Link Service");
+                CrmEmailAutoLinkService.Stop();
+            }
+            catch (Exception ex)
+            {
+                LogManager.GetLogger("ASC").Error("Error stopping CRM Email Auto-Link Service", ex);
+            }
+        }
     }
 }
