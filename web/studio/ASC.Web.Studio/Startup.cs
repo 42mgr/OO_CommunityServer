@@ -115,11 +115,37 @@ namespace ASC.Web.Studio
                 LogManager.GetLogger("ASC").Error("Start Warmup", ex);
             }
 
-            // Initialize CRM Email Auto-Linking Service
+            // Initialize CRM Email Auto-Linking Service via reflection to avoid circular dependency
             try
             {
-                ASC.Mail.Core.Engine.CrmEmailAutoLinkService.Start();
-                LogManager.GetLogger("ASC").Info("CRM Email Auto-Link Service started successfully");
+                var mailAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "ASC.Mail");
+                
+                if (mailAssembly != null)
+                {
+                    var serviceType = mailAssembly.GetType("ASC.Mail.Core.Engine.CrmEmailAutoLinkService");
+                    if (serviceType != null)
+                    {
+                        var startMethod = serviceType.GetMethod("Start", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                        if (startMethod != null)
+                        {
+                            startMethod.Invoke(null, null);
+                            LogManager.GetLogger("ASC").Info("CRM Email Auto-Link Service started successfully via reflection");
+                        }
+                        else
+                        {
+                            LogManager.GetLogger("ASC").Warn("CRM Email Auto-Link Service Start method not found");
+                        }
+                    }
+                    else
+                    {
+                        LogManager.GetLogger("ASC").Warn("CRM Email Auto-Link Service type not found");
+                    }
+                }
+                else
+                {
+                    LogManager.GetLogger("ASC").Warn("ASC.Mail assembly not found - CRM Auto-Link Service not started");
+                }
             }
             catch (Exception ex)
             {

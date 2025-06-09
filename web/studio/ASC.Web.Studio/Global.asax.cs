@@ -400,7 +400,23 @@ namespace ASC.Web.Studio
             try
             {
                 LogManager.GetLogger("ASC").Info("Application ending - stopping CRM Email Auto-Link Service");
-                ASC.Mail.Core.Engine.CrmEmailAutoLinkService.Stop();
+                
+                // Stop CRM Email Auto-Linking Service via reflection to avoid circular dependency
+                var mailAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                    .FirstOrDefault(a => a.GetName().Name == "ASC.Mail");
+                
+                if (mailAssembly != null)
+                {
+                    var serviceType = mailAssembly.GetType("ASC.Mail.Core.Engine.CrmEmailAutoLinkService");
+                    if (serviceType != null)
+                    {
+                        var stopMethod = serviceType.GetMethod("Stop", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                        if (stopMethod != null)
+                        {
+                            stopMethod.Invoke(null, null);
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
