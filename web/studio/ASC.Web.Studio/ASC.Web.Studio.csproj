@@ -79,6 +79,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Core\AdminHelperSettings.cs" />
+    <Compile Include="Core\CrmEmailAutoLinkService.cs" />
     <Compile Include="Core\Notify\SpamEmailSettings.cs" />
     <Compile Include="Core\OpensourceGiftSettings.cs" />
     <Compile Include="Core\PrivacyRoomSettings.cs" />
