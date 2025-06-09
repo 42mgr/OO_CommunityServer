@@ -124,8 +124,10 @@ namespace ASC.Mail.Core.Engine
                 CoreContext.TenantManager.SetCurrentTenant(tenantId);
 
                 // Use database queries to find recent emails for CRM auto-linking
-                using (var db = DbManager.FromHttpContext(tenantId.ToString()))
+                using (var daoFactory = new DaoFactory())
                 {
+                    var db = daoFactory.DbManager;
+                    
                     // Get unprocessed emails from the last period using direct SQL
                     var query = @"
                         SELECT m.id, m.id_user, m.from_text, m.to_text, m.cc 
