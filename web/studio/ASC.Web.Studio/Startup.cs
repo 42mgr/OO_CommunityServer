@@ -118,7 +118,7 @@ namespace ASC.Web.Studio
             // Initialize CRM Email Auto-Linking Service
             try
             {
-                CrmEmailAutoLinkService.Start();
+                ASC.Mail.Core.Engine.CrmEmailAutoLinkService.Start();
                 LogManager.GetLogger("ASC").Info("CRM Email Auto-Link Service started successfully");
             }
             catch (Exception ex)

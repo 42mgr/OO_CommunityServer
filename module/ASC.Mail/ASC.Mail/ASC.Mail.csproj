@@ -157,6 +157,7 @@
     <Compile Include="Core\Engine\ChainEngine.cs" />
     <Compile Include="Core\Engine\ContactEngine.cs" />
     <Compile Include="Core\Engine\CrmLinkEngine.cs" />
+    <Compile Include="Core\Engine\CrmEmailAutoLinkService.cs" />
     <Compile Include="Core\Engine\DisplayImagesAddressEngine.cs" />
     <Compile Include="Core\Engine\Operations\MailRemoveMailserverMailboxOperation.cs" />
     <Compile Include="Core\Engine\ServerDomainEngine.cs" />

@@ -400,7 +400,7 @@ namespace ASC.Web.Studio
             try
             {
                 LogManager.GetLogger("ASC").Info("Application ending - stopping CRM Email Auto-Link Service");
-                CrmEmailAutoLinkService.Stop();
+                ASC.Mail.Core.Engine.CrmEmailAutoLinkService.Stop();
             }
             catch (Exception ex)
             {

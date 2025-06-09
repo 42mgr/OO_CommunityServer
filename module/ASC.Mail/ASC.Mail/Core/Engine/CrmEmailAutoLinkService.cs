@@ -12,14 +12,13 @@ using System.Web;
 using ASC.Common.Logging;
 using ASC.Core;
 using ASC.Core.Tenants;
-using ASC.Mail.Core.Engine;
 using ASC.Mail.Core.Dao;
 using ASC.Mail.Core.Dao.Expressions.Message;
 using ASC.Mail.Data.Contracts;
 using ASC.Mail.Utils;
 using ASC.CRM.Core.Entities;
 
-namespace ASC.Web.Studio.Core
+namespace ASC.Mail.Core.Engine
 {
     /// <summary>
     /// Service that monitors for new emails and automatically links them to CRM contacts

@@ -158,11 +158,9 @@ jobs:
         # Create a directory for modified files
         New-Item -ItemType Directory -Force -Path "modified-dlls"
         
-        # Collect web studio DLL with CRM service and mail DLL (no more copying to core)
+        # Collect mail DLL with integrated CRM auto-linking service
         $targetFiles = @(
-          "ASC.Web.Studio.dll",
           "ASC.Mail.dll",
-          "ASC.Web.Studio.xml",
           "ASC.Mail.xml"
         )
         
@@ -184,16 +182,10 @@ jobs:
         Get-ChildItem "modified-dlls" | Format-Table Name, Length -AutoSize
         
         # Verify CRM auto-linking components
-        if (Test-Path "modified-dlls/ASC.Web.Studio.dll") {
-          Write-Host "✅ ASC.Web.Studio.dll with CRM Email Auto-Link Service collected"
-        } else {
-          Write-Host "❌ ASC.Web.Studio.dll not found - CRM service may not be included"
-        }
-        
         if (Test-Path "modified-dlls/ASC.Mail.dll") {
-          Write-Host "✅ ASC.Mail.dll with enhanced CRM functionality collected"
+          Write-Host "✅ ASC.Mail.dll with integrated CRM Email Auto-Link Service collected"
         } else {
-          Write-Host "❌ ASC.Mail.dll not found"
+          Write-Host "❌ ASC.Mail.dll not found - CRM service may not be included"
         }
         
     - name: Upload modified DLLs
@@ -283,7 +275,7 @@ jobs:
         Description: Community Server is a free open-source collaborative system developed to manage documents, projects, customer relationship and emails, all in one place.
         X-Custom-Build: true
         X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-        X-Modified-Components: ASC.Web.Studio.dll (CRM Email Auto-Link Service), ASC.Mail.dll (enhanced CRM functionality)
+        X-Modified-Components: ASC.Mail.dll (integrated CRM Email Auto-Link Service with enhanced functionality)
         EOF
           
           echo "📋 New control file:"
