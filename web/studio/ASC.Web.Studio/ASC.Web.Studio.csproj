@@ -4487,6 +4487,10 @@
       <Project>{988536c1-4b89-4649-8f77-5c16f55d95d1}</Project>
       <Name>ASC.VoipService</Name>
     </ProjectReference>
+    <ProjectReference Include="..\..\..\module\ASC.Mail\ASC.Mail\ASC.Mail.csproj">
+      <Project>{b06a7e68-5e83-4a1b-9945-30a7bea4fb46}</Project>
+      <Name>ASC.Mail</Name>
+    </ProjectReference>
     <ProjectReference Include="..\..\core\ASC.Web.Core\ASC.Web.Core.csproj">
       <Project>{02c40a64-fe22-41d0-9037-69f0d6f787a9}</Project>
       <Name>ASC.Web.Core</Name>
