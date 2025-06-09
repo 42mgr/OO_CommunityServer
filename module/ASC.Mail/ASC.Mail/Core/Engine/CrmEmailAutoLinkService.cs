@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading;
 using System.Web;
 
+using ASC.Common.Data;
 using ASC.Common.Logging;
 using ASC.Core;
 using ASC.Core.Tenants;
@@ -122,23 +123,36 @@ namespace ASC.Mail.Core.Engine
             {
                 CoreContext.TenantManager.SetCurrentTenant(tenantId);
 
-                using (var daoFactory = new DaoFactory())
+                // Use database queries to find recent emails for CRM auto-linking
+                using (var db = DbManager.FromHttpContext(tenantId.ToString()))
                 {
-                    var daoMailInfo = daoFactory.CreateMailInfoDao(tenantId, null);
+                    // Get unprocessed emails from the last period using direct SQL
+                    var query = @"
+                        SELECT m.id, m.id_user, m.from_text, m.to_text, m.cc 
+                        FROM mail_mail m
+                        LEFT JOIN mail_chain_x_crm_entity l ON m.chain_id = l.id_chain AND m.id_mailbox = l.id_mailbox
+                        WHERE m.tenant = @tenant 
+                        AND m.date_received >= @lastProcessed 
+                        AND m.date_received <= @now
+                        AND m.folder IN (1, 2)
+                        AND l.id_chain IS NULL
+                        ORDER BY m.date_received DESC
+                        LIMIT 100";
 
-                    // Get unprocessed emails from the last period
-                    var unprocessedEmails = daoMailInfo.GetMailInfoList(
-                        SimpleMessagesExp.CreateBuilder(tenantId, null)
-                            .SetDateReceived(_lastProcessedTime, DateTime.UtcNow)
-                            .SetFolder(1, 2) // Sent and Inbox
-                            .Build()
-                    ).Where(mail => !IsEmailAlreadyLinkedToCrm(tenantId, mail.Id)).ToList();
+                    var unprocessedEmails = db.ExecuteList(query, 
+                        new { tenant = tenantId, lastProcessed = _lastProcessedTime, now = DateTime.UtcNow })
+                        .Select(r => new 
+                        {
+                            Id = Convert.ToInt32(r[0]),
+                            UserId = r[1].ToString(),
+                            From = r[2].ToString(),
+                            To = r[3].ToString(),
+                            Cc = r[4]?.ToString()
+                        }).ToList();
 
                     if (!unprocessedEmails.Any()) return 0;
 
                     Log.Info($"📧 CrmEmailAutoLinkService: Found {unprocessedEmails.Count} unprocessed emails for tenant {tenantId}");
-
-                    var engine = new EngineFactory(tenantId, null);
 
                     foreach (var mailInfo in unprocessedEmails)
                     {
@@ -147,6 +161,7 @@ namespace ASC.Mail.Core.Engine
                             // Set security context for the email owner
                             SecurityContext.AuthenticateMe(new Guid(mailInfo.UserId));
 
+                            var engine = new EngineFactory(tenantId, mailInfo.UserId);
                             var message = engine.MessageEngine.GetMessage(mailInfo.Id, new MailMessageData.Options
                             {
                                 LoadImages = false,
