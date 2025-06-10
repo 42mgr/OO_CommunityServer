@@ -140,8 +140,23 @@ jobs:
         
     - name: Restore NuGet packages
       run: |
-        Write-Host "📦 Restoring NuGet packages..."
-        nuget restore
+         Write-Host "🧹 Clearing NuGet caches to force fresh package downloads...
+              # Clear all NuGet caches
+               nuget locals all -clear
+               dotnet nuget locals all --clear
+     
+               # Also clear MSBuild cache
+               if (Test-Path "$env:LOCALAPPDATA\Microsoft\MSBuild") {
+                 Remove-Item "$env:LOCALAPPDATA\Microsoft\MSBuild\*" -Recurse -Force -ErrorAction SilentlyContinue
+               }
+     
+               # Clear temp files
+               if (Test-Path "$env:TEMP\NuGetScratch") {
+                 Remove-Item "$env:TEMP\NuGetScratch" -Recurse -Force -ErrorAction SilentlyContinue
+               }
+     
+               Write-Host "📦 Restoring NuGet packages with fresh cache..."
+               nuget restore -ForceEnglishOutput
         
     - name: Build solution (clean build)
       run: |
