@@ -399,14 +399,27 @@ namespace ASC.Web.Studio
         {
             try
             {
-                LogManager.GetLogger("ASC").Info("Application ending - stopping CRM Email Auto-Link Service");
+                LogManager.GetLogger("ASC").Info("Application ending - stopping CRM Email Auto-Link Services");
                 
-                // Stop CRM Email Auto-Linking Service via reflection to avoid circular dependency
+                // Stop CRM Email Auto-Linking Services via reflection to avoid circular dependency
                 var mailAssembly = AppDomain.CurrentDomain.GetAssemblies()
                     .FirstOrDefault(a => a.GetName().Name == "ASC.Mail");
                 
                 if (mailAssembly != null)
                 {
+                    // Stop WebCrmMonitoringService first
+                    var webServiceType = mailAssembly.GetType("ASC.Mail.Core.Engine.WebCrmMonitoringService");
+                    if (webServiceType != null)
+                    {
+                        var stopMethod = webServiceType.GetMethod("Stop", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                        if (stopMethod != null)
+                        {
+                            stopMethod.Invoke(null, null);
+                            LogManager.GetLogger("ASC").Info("Web CRM Monitoring Service stopped");
+                        }
+                    }
+                    
+                    // Also stop original service if present
                     var serviceType = mailAssembly.GetType("ASC.Mail.Core.Engine.CrmEmailAutoLinkService");
                     if (serviceType != null)
                     {
@@ -414,13 +427,14 @@ namespace ASC.Web.Studio
                         if (stopMethod != null)
                         {
                             stopMethod.Invoke(null, null);
+                            LogManager.GetLogger("ASC").Info("CRM Email Auto-Link Service stopped");
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                LogManager.GetLogger("ASC").Error("Error stopping CRM Email Auto-Link Service", ex);
+                LogManager.GetLogger("ASC").Error("Error stopping CRM Email Auto-Link Services", ex);
             }
         }
     }
