@@ -117,13 +117,12 @@ namespace ASC.Mail.Core.Engine
 
                 foreach (var chainedMessage in chainedMessages)
                 {
-                    var message = engine.MessageEngine.GetMessage(chainedMessage.Id,
-                        new MailMessageData.Options
-                        {
-                            LoadImages = true,
-                            LoadBody = true,
-                            NeedProxyHttp = false
-                        });
+                    var messageOptions = new MailMessageData.Options();
+                    messageOptions.LoadImages = true;
+                    messageOptions.LoadBody = true;
+                    messageOptions.NeedProxyHttp = false;
+                    
+                    var message = engine.MessageEngine.GetMessage(chainedMessage.Id, messageOptions);
 
                     message.LinkedCrmEntityIds = contactIds;
 
@@ -206,12 +205,12 @@ namespace ASC.Mail.Core.Engine
 
             var engine = new EngineFactory(Tenant, User);
 
-            var messageItem = engine.MessageEngine.GetMessage(messageId, new MailMessageData.Options
-            {
-                LoadImages = true,
-                LoadBody = true,
-                NeedProxyHttp = false
-            });
+            var messageOptions = new MailMessageData.Options();
+            messageOptions.LoadImages = true;
+            messageOptions.LoadBody = true;
+            messageOptions.NeedProxyHttp = false;
+            
+            var messageItem = engine.MessageEngine.GetMessage(messageId, messageOptions);
 
             messageItem.LinkedCrmEntityIds = crmContactIds.ToList();
 
@@ -480,13 +479,12 @@ namespace ASC.Mail.Core.Engine
 
                 foreach (var chainedMessage in chainedMessages)
                 {
-                    var message = engine.MessageEngine.GetMessage(chainedMessage.Id,
-                        new MailMessageData.Options
-                        {
-                            LoadImages = true,
-                            LoadBody = true,
-                            NeedProxyHttp = false
-                        });
+                    var messageOptions = new MailMessageData.Options();
+                    messageOptions.LoadImages = true;
+                    messageOptions.LoadBody = true;
+                    messageOptions.NeedProxyHttp = false;
+                    
+                    var message = engine.MessageEngine.GetMessage(chainedMessage.Id, messageOptions);
 
                     message.LinkedCrmEntityIds = contactIds;
 
