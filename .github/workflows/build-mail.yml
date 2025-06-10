@@ -23,12 +23,6 @@ jobs:
         # Create a cache key based on the week (updates weekly)
         echo "key=onlyoffice-deb-extracted-$(date +%Y-W%U)" >> $GITHUB_OUTPUT
         
-    - name: Check if extracted .deb is cached
-      id: cache-check
-      uses: actions/cache@v3
-      with:
-        path: deb-extracted
-        key: ${{ steps.cache-key.outputs.key }}
         
     - name: Download and extract original .deb
       if: steps.cache-check.outputs.cache-hit != 'true' || github.event.inputs.force_download == 'true'
