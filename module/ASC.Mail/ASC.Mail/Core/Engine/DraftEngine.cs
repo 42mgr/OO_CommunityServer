@@ -347,13 +347,6 @@ namespace ASC.Mail.Core.Engine
 
                         var factory = new EngineFactory(draft.Mailbox.TenantId, draft.Mailbox.UserId, Log);
 
-                        // Auto-match and link sent emails to existing CRM contacts
-                        try {
-                            factory.CrmLinkEngine.ProcessIncomingEmailForCrm(message, draft.Mailbox, scheme);
-                        } catch (Exception ex) {
-                            Log.WarnFormat("CRM auto-processing failed for sent message {0}: {1}", message.Id, ex.Message);
-                        }
-
                         factory.CrmLinkEngine.AddRelationshipEventForLinkedAccounts(draft.Mailbox, message, scheme);
 
                         factory.EmailInEngine.SaveEmailInData(draft.Mailbox, message, scheme);

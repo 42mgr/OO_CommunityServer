@@ -35,7 +35,6 @@ using ASC.Mail.Core.Dao.Expressions.Message;
 using ASC.Mail.Core.Dao.Interfaces;
 using ASC.Mail.Core.DbSchema.Tables;
 using ASC.Mail.Core.Entities;
-using ASC.CRM.Core.Entities; // added
 using ASC.Mail.Data.Contracts;
 using ASC.Mail.Data.Search;
 using ASC.Mail.Data.Storage;
@@ -1399,29 +1398,6 @@ namespace ASC.Mail.Core.Engine
 
             if (TrySaveMail(mailbox, message, folder, userFolderId, uidl, md5, log))
             {
-                log.InfoFormat("DEBUG: MailSave successful - message.Id={0}, folder.Folder={1}, checking CRM conditions", message != null ? message.Id : -1, folder.Folder);
-                
-                // Auto-process incoming emails for CRM integration
-                if (message != null && message.Id > 0 && folder.Folder == FolderType.Inbox) 
-                {
-                    log.InfoFormat("DEBUG: CRM conditions met - starting auto-processing for message {0}", message.Id);
-                    try 
-                    {
-                        var crmEngine = new CrmLinkEngine(mailbox.TenantId, mailbox.UserId, log);
-                        crmEngine.ProcessIncomingEmailForCrm(message, mailbox, null);
-                        log.InfoFormat("CRM auto-processing completed for message {0}", message.Id);
-                    }
-                    catch (Exception ex) 
-                    {
-                        log.WarnFormat("CRM auto-processing failed for message {0}: {1}", message.Id, ex.Message);
-                    }
-                }
-                else 
-                {
-                    log.InfoFormat("DEBUG: CRM conditions NOT met - message.Id={0}, folder.Folder={1} (Inbox={2})", 
-                        message != null ? message.Id : -1, folder.Folder, FolderType.Inbox);
-                }
-                
                 return message;
             }
 
