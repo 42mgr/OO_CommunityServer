@@ -1,0 +1,473 @@
+name: Build Custom OnlyOffice .deb with CRM Auto-Linking
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      force_deb_download:
+        description: 'Force download fresh OnlyOffice .deb package'
+        required: false
+        default: false
+        type: boolean
+      skip_verification:
+        description: 'Skip DLL verification step (for debugging)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ONLYOFFICE_VERSION_CACHE_KEY: "v1-onlyoffice-deb"
+  SOURCE_HASH_KEY: ${{ hashFiles('module/ASC.Mail/**/*.cs', 'web/studio/ASC.Web.Studio/Startup.cs') }}
+
+jobs:
+  check-source-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      source-changed: ${{ steps.check.outputs.changed }}
+      cache-key: ${{ steps.check.outputs.cache-key }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 2
+        
+    - name: Check for source changes
+      id: check
+      run: |
+        echo "cache-key=${ONLYOFFICE_VERSION_CACHE_KEY}-${SOURCE_HASH_KEY}" >> $GITHUB_OUTPUT
+        
+        # Check if mail-related source files changed in last commit
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "(module/ASC\.Mail/|web/studio/.*Startup\.cs)" || true)
+        
+        if [ -n "$CHANGED_FILES" ]; then
+          echo "changed=true" >> $GITHUB_OUTPUT
+          echo "📝 Source changes detected in:"
+          echo "$CHANGED_FILES"
+        else
+          echo "changed=false" >> $GITHUB_OUTPUT
+          echo "📝 No source changes detected"
+        fi
+
+  extract-original-deb:
+    runs-on: ubuntu-latest
+    needs: check-source-changes
+    outputs:
+      deb-version: ${{ steps.extract.outputs.version }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
+        
+    - name: Check OnlyOffice .deb cache
+      id: cache-deb
+      uses: actions/cache@v3
+      with:
+        path: |
+          original.deb
+          deb-version.txt
+        key: ${{ env.ONLYOFFICE_VERSION_CACHE_KEY }}
+        
+    - name: Download OnlyOffice .deb
+      if: steps.cache-deb.outputs.cache-hit != 'true' || github.event.inputs.force_deb_download == 'true'
+      run: |
+        echo "📦 Downloading fresh OnlyOffice .deb package..."
+        
+        # Config
+        KEY_URL="https://download.onlyoffice.com/repo/onlyoffice.key"
+        REPO_BASE_URL="https://download.onlyoffice.com/repo/debian"
+        DIST="squeeze"
+        ARCH="amd64"
+        PACKAGE="onlyoffice-communityserver"
+        
+        # Download package index
+        WORK_DIR=$(mktemp -d)
+        curl -fsSL "$KEY_URL" | gpg --dearmor > "$WORK_DIR/onlyoffice.gpg"
+        INDEX_URL="$REPO_BASE_URL/dists/$DIST/main/binary-$ARCH/Packages.gz"
+        curl -fsSL "$INDEX_URL" | gzip -d > "$WORK_DIR/Packages"
+        
+        # Extract package info
+        DEB_URL=$(awk -v pkg="$PACKAGE" '$1 == "Package:" && $2 == pkg {found=1} found && $1 == "Filename:" {print $2; exit}' "$WORK_DIR/Packages")
+        VERSION=$(awk -v pkg="$PACKAGE" '$1 == "Package:" && $2 == pkg {found=1} found && $1 == "Version:" {print $2; exit}' "$WORK_DIR/Packages")
+        
+        # Download .deb
+        FULL_URL="$REPO_BASE_URL/$DEB_URL"
+        curl -fsSL -o original.deb "$FULL_URL"
+        echo "$VERSION" > deb-version.txt
+        
+        echo "✅ Downloaded OnlyOffice v$VERSION"
+        ls -lh original.deb
+        
+    - name: Extract .deb package
+      id: extract
+      run: |
+        echo "📦 Extracting .deb package..."
+        
+        # Always extract fresh to avoid any stale files
+        rm -rf deb-extracted
+        mkdir -p deb-extracted
+        cd deb-extracted
+        dpkg-deb -R ../original.deb .
+        
+        # Get version info
+        VERSION=$(cat ../deb-version.txt)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        
+        # Create metadata
+        cat > .metadata << EOF
+        Extracted-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        OnlyOffice-Version: $VERSION
+        Workflow-Run: ${{ github.run_number }}
+        EOF
+        
+        echo "✅ Extraction complete"
+        echo "📊 Package contains $(find . -type f | wc -l) files"
+        
+    - name: Remove existing mail assemblies
+      run: |
+        echo "🧹 Removing original mail assemblies for clean replacement..."
+        
+        cd deb-extracted
+        
+        # Find and remove existing mail DLLs/PDBs
+        REMOVED_COUNT=0
+        find . -name "ASC.Mail*.dll" -o -name "ASC.Mail*.pdb" | while read -r file; do
+          echo "  Removing: $file"
+          rm -f "$file"
+          REMOVED_COUNT=$((REMOVED_COUNT + 1))
+        done
+        
+        # Verify cleanup
+        REMAINING=$(find . -name "ASC.Mail*.dll" -o -name "ASC.Mail*.pdb" | wc -l)
+        if [ "$REMAINING" -eq 0 ]; then
+          echo "✅ All mail assemblies removed - ready for clean replacement"
+        else
+          echo "⚠️ Warning: $REMAINING mail assemblies still present"
+          find . -name "ASC.Mail*" -type f
+        fi
+        
+    - name: Upload clean .deb extraction
+      uses: actions/upload-artifact@v4
+      with:
+        name: deb-extracted-clean
+        path: deb-extracted/
+        retention-days: 1
+
+  build-custom-mail:
+    runs-on: windows-latest
+    needs: check-source-changes
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        
+    - name: Display build context
+      run: |
+        Write-Host "🔍 Build Context:"
+        Write-Host "  Branch: $(git branch --show-current)"
+        Write-Host "  Commit: $(git rev-parse --short HEAD)"
+        Write-Host "  Source Changed: ${{ needs.check-source-changes.outputs.source-changed }}"
+        Write-Host "  Cache Key: ${{ needs.check-source-changes.outputs.cache-key }}"
+        git log -3 --oneline
+        
+    - name: Setup build environment
+      run: |
+        Write-Host "⚙️ Setting up build environment..."
+      
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.3.1
+      
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '5.0'
+        
+    - name: Aggressive cleanup for fresh build
+      run: |
+        Write-Host "🧹 Performing aggressive cleanup for completely fresh build..."
+        
+        # Remove all build artifacts
+        Get-ChildItem -Recurse -Directory -Name @("bin", "obj", "Release", "Debug", "deploy") -ErrorAction SilentlyContinue | 
+          ForEach-Object { 
+            Write-Host "  Removing: $_"
+            Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue 
+          }
+        
+        # Remove any existing mail assemblies
+        Get-ChildItem -Recurse -Filter "ASC.Mail*.dll" -ErrorAction SilentlyContinue | 
+          ForEach-Object { 
+            Write-Host "  Removing DLL: $($_.FullName)"
+            Remove-Item $_ -Force -ErrorAction SilentlyContinue 
+          }
+        
+        # Clear all caches
+        Write-Host "🗑️ Clearing build caches..."
+        nuget locals all -clear -ErrorAction SilentlyContinue
+        dotnet nuget locals all --clear -ErrorAction SilentlyContinue
+        
+        # Clear MSBuild cache
+        if (Test-Path "$env:LOCALAPPDATA\Microsoft\MSBuild") {
+          Remove-Item "$env:LOCALAPPDATA\Microsoft\MSBuild\*" -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
+        Write-Host "✅ Cleanup complete - ready for fresh build"
+        
+    - name: Restore packages and build
+      run: |
+        Write-Host "📦 Restoring NuGet packages..."
+        nuget restore -ForceEnglishOutput -Verbosity quiet
+        
+        Write-Host "🔨 Building solution (clean build)..."
+        msbuild build/msbuild/build.proj /p:Configuration=Release /t:Clean /flp:LogFile=Clean.log /verbosity:minimal /nologo
+        msbuild build/msbuild/build.proj /p:Configuration=Release /flp:LogFile=Build.log /verbosity:minimal /nologo
+        
+        Write-Host "🚀 Deploying solution..."
+        msbuild build/msbuild/deploy.proj /p:Configuration=Release /flp:LogFile=Deploy.log /verbosity:minimal /nologo
+        
+    - name: Verify build integrity
+      if: github.event.inputs.skip_verification != 'true'
+      run: |
+        Write-Host "🔍 Verifying build integrity..."
+        
+        # Find the built ASC.Mail.dll
+        $mailDll = Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.FullName -like "*deploy*" -or $_.FullName -like "*Release*" } |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 1
+        
+        if (-not $mailDll) {
+          $mailDll = Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -ErrorAction SilentlyContinue | 
+                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        
+        if ($mailDll) {
+          Write-Host "📍 Verifying: $($mailDll.FullName)"
+          Write-Host "📅 Built: $($mailDll.LastWriteTime)"
+          Write-Host "📏 Size: $($mailDll.Length) bytes"
+          
+          # Verify duplication fix is applied
+          try {
+            $assembly = [System.Reflection.Assembly]::LoadFile($mailDll.FullName)
+            $hasOldMethod = $false
+            
+            foreach ($type in $assembly.GetTypes()) {
+              if ($type.Name -eq "MessageEngine" -or $type.Name -eq "DraftEngine") {
+                foreach ($method in $type.GetMethods()) {
+                  if ($method.Name -eq "ProcessIncomingEmailForCrm") {
+                    Write-Host "❌ CRITICAL: Found duplicate processing method in $($type.Name)"
+                    $hasOldMethod = $true
+                    break
+                  }
+                }
+              }
+            }
+            
+            # Verify CRM service is included
+            $hasCrmService = $false
+            foreach ($type in $assembly.GetTypes()) {
+              if ($type.Name -eq "WebCrmMonitoringService" -or $type.Name -eq "CrmEmailAutoLinkService") {
+                Write-Host "✅ Found CRM service: $($type.Name)"
+                $hasCrmService = $true
+              }
+            }
+            
+            if ($hasOldMethod) {
+              throw "Build verification failed: Duplication code still present"
+            }
+            
+            if (-not $hasCrmService) {
+              Write-Host "⚠️ Warning: CRM auto-linking services not detected in built assembly"
+            }
+            
+            Write-Host "✅ Build verification passed - source changes applied correctly"
+          }
+          catch {
+            Write-Host "❌ Build verification failed: $($_.Exception.Message)"
+            throw "Build integrity check failed"
+          }
+        } else {
+          throw "ASC.Mail.dll not found after build"
+        }
+        
+    - name: Collect build outputs
+      run: |
+        Write-Host "📦 Collecting build outputs..."
+        
+        New-Item -ItemType Directory -Force -Path "modified-assemblies"
+        
+        $targetFiles = @("ASC.Mail.dll", "ASC.Mail.xml")
+        
+        foreach ($fileName in $targetFiles) {
+          $found = Get-ChildItem -Recurse -Filter $fileName -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.Directory.Name -like "*Release*" -or $_.Directory.Name -eq "bin" } |
+                   Select-Object -First 1
+          
+          if ($found) {
+            Write-Host "✅ Collecting: $($found.FullName)"
+            Copy-Item $found.FullName "modified-assemblies/"
+          } else {
+            Write-Host "⚠️ Not found: $fileName"
+          }
+        }
+        
+        Write-Host "📊 Build outputs:"
+        Get-ChildItem "modified-assemblies" | Format-Table Name, Length, LastWriteTime -AutoSize
+        
+    - name: Upload custom assemblies
+      uses: actions/upload-artifact@v4
+      with:
+        name: custom-mail-assemblies
+        path: modified-assemblies/
+        retention-days: 1
+
+  create-custom-deb:
+    needs: [extract-original-deb, build-custom-mail]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download clean .deb extraction
+      uses: actions/download-artifact@v4
+      with:
+        name: deb-extracted-clean
+        path: deb-contents/
+        
+    - name: Download custom assemblies
+      uses: actions/download-artifact@v4
+      with:
+        name: custom-mail-assemblies
+        path: custom-assemblies/
+        
+    - name: Display package context
+      run: |
+        echo "📋 Package Context:"
+        echo "  OnlyOffice Version: ${{ needs.extract-original-deb.outputs.deb-version }}"
+        echo "  Build Run: ${{ github.run_number }}"
+        echo ""
+        echo "Custom assemblies:"
+        ls -la custom-assemblies/
+        echo ""
+        echo "Package metadata:"
+        cat deb-contents/.metadata
+        
+    - name: Replace assemblies in package
+      run: |
+        echo "🔄 Replacing assemblies in OnlyOffice package..."
+        
+        cd deb-contents
+        
+        for file in ../custom-assemblies/*; do
+          if [ -f "$file" ]; then
+            file_name=$(basename "$file")
+            echo "Processing $file_name..."
+            
+            # Find all instances and replace
+            find . -name "$file_name" -type f | while read -r target; do
+              echo "  Replacing: $target"
+              cp "$file" "$target"
+              chmod --reference="$target" "$file" 2>/dev/null || true
+            done
+          fi
+        done
+        
+        echo "✅ Assembly replacement complete"
+        
+    - name: Update package metadata
+      run: |
+        cd deb-contents
+        
+        if [ -f DEBIAN/control ]; then
+          ORIG_VERSION="${{ needs.extract-original-deb.outputs.deb-version }}"
+          CUSTOM_VERSION="${ORIG_VERSION}-crm-auto-link-$(date +%Y%m%d)"
+          
+          echo "📝 Updating package version to: $CUSTOM_VERSION"
+          
+          cat > DEBIAN/control << EOF
+        Package: onlyoffice-communityserver
+        Version: $CUSTOM_VERSION
+        Architecture: all
+        Maintainer: Ascensio System SIA
+        Installed-Size: 1634637
+        Depends: debconf (>= 0.5) | debconf-2.0, mysql-server, mysql-client, mono-complete (>= 6.0), ca-certificates-mono, nginx (>= 1.9.5) | nginx-extras (>= 1.9.5), mono-webserver-hyperfastcgi, nodejs (>= 14.18.0), python3-pip, elasticsearch (= 7.16.3), redis-server, ffmpeg, dotnet-sdk-7.0
+        Recommends: ruby-god
+        Section: web
+        Priority: optional
+        Description: Community Server with integrated CRM Email Auto-Linking functionality
+        X-Custom-Build: true
+        X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        X-Modified-Components: ASC.Mail.dll (WebCrmMonitoringService, CrmEmailAutoLinkService)
+        X-Base-Version: $ORIG_VERSION
+        EOF
+        fi
+        
+    - name: Build custom .deb package
+      run: |
+        echo "📦 Building custom OnlyOffice package..."
+        
+        # Fix permissions
+        find deb-contents -type d -exec chmod 755 {} \;
+        find deb-contents/DEBIAN -type f -exec chmod 644 {} \;
+        
+        # Make maintainer scripts executable
+        for script in postinst preinst postrm prerm config; do
+          [ -f "deb-contents/DEBIAN/$script" ] && chmod 755 "deb-contents/DEBIAN/$script"
+        done
+        
+        # Build package
+        dpkg-deb -b deb-contents onlyoffice-communityserver-crm-autolink.deb
+        
+        echo "✅ Custom package built successfully"
+        ls -lh onlyoffice-communityserver-crm-autolink.deb
+        
+        # Verify package integrity
+        dpkg-deb -I onlyoffice-communityserver-crm-autolink.deb
+        
+    - name: Upload custom package
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-crm-autolink-deb
+        path: onlyoffice-communityserver-crm-autolink.deb
+        retention-days: 7
+        
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: crm-autolink-v1.0.${{ github.run_number }}
+        name: OnlyOffice CRM Auto-Link v${{ github.run_number }}
+        body: |
+          OnlyOffice Community Server with integrated CRM Email Auto-Linking
+          
+          **Base Version:** ${{ needs.extract-original-deb.outputs.deb-version }}
+          **Build:** ${{ github.run_number }}
+          **Commit:** ${{ github.sha }}
+          
+          **Features:**
+          - Automatic CRM contact linking for incoming/outgoing emails
+          - Background monitoring service (WebCrmMonitoringService)
+          - Enhanced email processing (CrmEmailAutoLinkService)
+          - Duplication prevention for email processing
+          
+          **Modified Components:**
+          - ASC.Mail.dll (web layer with CRM auto-linking)
+        files: onlyoffice-communityserver-crm-autolink.deb
+
+    - name: Cleanup old releases
+      uses: dev-drprasad/delete-older-releases@v0.3.4
+      with:
+        repo: ${{ github.repository }}
+        keep_latest: 3
+        delete_tag_pattern: crm-autolink-
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Trigger Docker build
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.PAT_TOKEN }}
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: '42mgr',
+            repo: 'OO_Docker-CommunityServer',
+            workflow_id: 'build-docker.yml',
+            ref: 'master'
+          })
