@@ -136,20 +136,57 @@ jobs:
       with:
         dotnet-version: '5.0'
         
+    - name: Clean previous builds
+      run: |
+        Write-Host "🧹 Cleaning previous builds and forcing fresh compile..."
+        # Remove any pre-existing DLL files to force rebuild
+        Get-ChildItem -Recurse -Filter "ASC.Mail.dll" | Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Recurse -Filter "ASC.Mail.Core.dll" | Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Host "✅ Cleaned previous mail DLLs"
+        
     - name: Restore NuGet packages
       run: |
         Write-Host "📦 Restoring NuGet packages..."
         nuget restore
         
-    - name: Build solution
+    - name: Build solution (clean build)
       run: |
-        Write-Host "🔨 Building solution..."
-        msbuild build/msbuild/build.proj /p:Configuration=Release /flp:LogFile=Build.log /verbosity:minimal
+        Write-Host "🔨 Building solution with clean rebuild..."
+        # Use clean rebuild to ensure fresh compilation
+        msbuild build/msbuild/build.proj /p:Configuration=Release /t:Rebuild /flp:LogFile=Build.log /verbosity:minimal
         
     - name: Deploy solution
       run: |
         Write-Host "🚀 Deploying solution..."
         msbuild build/msbuild/deploy.proj /p:Configuration=Release /flp:LogFile=Deploy.log /verbosity:minimal
+        
+    - name: Verify duplication fix in built DLL
+      run: |
+        Write-Host "🔍 Verifying duplication fix is applied..."
+        
+        # Find the built ASC.Mail.dll
+        $mailDll = Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.Directory.Name -like "*Release*" -or $_.Directory.Name -eq "bin" } |
+                   Select-Object -First 1
+        
+        if ($mailDll) {
+          Write-Host "📍 Found ASC.Mail.dll at: $($mailDll.FullName)"
+          
+          # Check if the duplication code is still present (it shouldn't be)
+          $hasOldCode = Select-String -Path $mailDll.FullName -Pattern "ProcessIncomingEmailForCrm" -Quiet
+          
+          if ($hasOldCode) {
+            Write-Host "❌ CRITICAL: Duplication code still present in built DLL!"
+            Write-Host "❌ Build failed to apply source code changes"
+            throw "Duplication fix not applied - build failed"
+          } else {
+            Write-Host "✅ SUCCESS: Duplication code removed from built DLL"
+            Write-Host "✅ Build successfully applied source code changes"
+          }
+        } else {
+          Write-Host "❌ Could not find ASC.Mail.dll for verification"
+          throw "ASC.Mail.dll not found"
+        }
         
     - name: Collect modified DLLs
       run: |
