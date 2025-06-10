@@ -151,9 +151,10 @@ jobs:
         
     - name: Build solution (clean build)
       run: |
-        Write-Host "🔨 Building solution with clean rebuild..."
-        # Use clean rebuild to ensure fresh compilation
-        msbuild build/msbuild/build.proj /p:Configuration=Release /t:Rebuild /flp:LogFile=Build.log /verbosity:minimal
+        Write-Host "🔨 Building solution with clean build..."
+        # First clean, then build to ensure fresh compilation
+        msbuild build/msbuild/build.proj /p:Configuration=Release /t:Clean /flp:LogFile=Clean.log /verbosity:minimal
+        msbuild build/msbuild/build.proj /p:Configuration=Release /flp:LogFile=Build.log /verbosity:minimal
         
     - name: Deploy solution
       run: |
