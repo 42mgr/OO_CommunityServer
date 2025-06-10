@@ -83,14 +83,6 @@ namespace ASC.Mail.Core.Engine
                     
                     // Use the existing CrmEmailAutoLinkService to process emails
                     // This service already has all the database access and logic
-                    if (CrmEmailAutoLinkService.IsRunning)
-                    {
-                        Log.DebugFormat("WebCrmMonitoringService: CrmEmailAutoLinkService is already running, skipping this cycle");
-                        return;
-                    }
-                    
-                    // The CrmEmailAutoLinkService handles all the actual processing
-                    // We just need to make sure it's running
                     try
                     {
                         CrmEmailAutoLinkService.Start();
