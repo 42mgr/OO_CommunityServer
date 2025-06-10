@@ -181,7 +181,12 @@ jobs:
         
         # Clear only HTTP cache to force fresh package downloads, keep package cache for efficiency
         Write-Host "Clearing NuGet HTTP cache (keeping package cache for efficiency)..."
-        nuget locals http-cache -clear -ErrorAction SilentlyContinue
+        try {
+          nuget locals http-cache -clear
+          Write-Host "  ✅ NuGet HTTP cache cleared"
+        } catch {
+          Write-Host "  ⚠️ NuGet cache clear failed, continuing anyway"
+        }
         
         Write-Host "✅ Targeted cleanup complete - other components preserved"
         
