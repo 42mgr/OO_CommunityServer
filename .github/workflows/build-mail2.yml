@@ -18,7 +18,6 @@ on:
 
 env:
   ONLYOFFICE_VERSION_CACHE_KEY: "v1-onlyoffice-deb"
-  SOURCE_HASH_KEY: ${{ hashFiles('module/ASC.Mail/**/*.cs', 'web/studio/ASC.Web.Studio/Startup.cs') }}
 
 jobs:
   check-source-changes:
@@ -35,7 +34,9 @@ jobs:
     - name: Check for source changes
       id: check
       run: |
-        echo "cache-key=${ONLYOFFICE_VERSION_CACHE_KEY}-${SOURCE_HASH_KEY}" >> $GITHUB_OUTPUT
+        # Generate hash of mail-related source files
+        SOURCE_HASH=$(find module/ASC.Mail -name "*.cs" -exec sha256sum {} \; | sha256sum | cut -d' ' -f1 | head -c 8)
+        echo "cache-key=${ONLYOFFICE_VERSION_CACHE_KEY}-${SOURCE_HASH}" >> $GITHUB_OUTPUT
         
         # Check if mail-related source files changed in last commit
         CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E "(module/ASC\.Mail/|web/studio/.*Startup\.cs)" || true)
