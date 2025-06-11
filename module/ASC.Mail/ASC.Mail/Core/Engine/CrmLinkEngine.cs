@@ -240,27 +240,27 @@ namespace ASC.Mail.Core.Engine
         }
 
 
-        public void ProcessIncomingEmailForCrm(MailMessageData message, MailBoxData mailbox, string httpContextScheme)
+        public void ProcessIncomingEmailForCrmWebStudio(MailMessageData message, MailBoxData mailbox, string httpContextScheme)
         {
-            Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - METHOD CALLED for message {0} from {1} to {2}", message.Id, message.From, message.To);
+            Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - METHOD CALLED for message {0} from {1} to {2}", message.Id, message.From, message.To);
             
             try
             {
                 // First check if this email is already linked to CRM
                 var existingCrmLinks = GetLinkedCrmEntitiesId(message.Id);
                 if (existingCrmLinks.Any()) {
-                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Message {0} is already linked to {1} CRM contact(s), skipping auto-processing", message.Id, existingCrmLinks.Count);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - Message {0} is already linked to {1} CRM contact(s), skipping auto-processing", message.Id, existingCrmLinks.Count);
                     return;
                 }
                 
-                Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - No existing CRM links found for message {0}, proceeding with contact search", message.Id);
+                Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - No existing CRM links found for message {0}, proceeding with contact search", message.Id);
                 // Extract all email addresses from message
                 var allEmails = new List<string>();
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.From));
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.To));
                 allEmails.AddRange(MailAddressHelper.ParseAddresses(message.Cc));
 
-                Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Extracted {0} email addresses: {1}", allEmails.Count, string.Join(", ", allEmails));
+                Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - Extracted {0} email addresses: {1}", allEmails.Count, string.Join(", ", allEmails));
 
                 var contactsToLink = new List<CrmContactData>();
 
@@ -302,27 +302,38 @@ namespace ASC.Mail.Core.Engine
                 // Link message to contacts if any were found - using enhanced manual-like process
                 if (contactsToLink.Any())
                 {
-                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Found {0} CRM contacts to link for message {1}: {2}", 
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - Found {0} CRM contacts to link for message {1}: {2}", 
                         contactsToLink.Count, message.Id, string.Join(",", contactsToLink.Select(c => $"ID:{c.Id} Type:{c.Type}")));
                     
                     // Set the linked CRM entities on the message for full processing
                     message.LinkedCrmEntityIds = contactsToLink;
                     
-                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - About to call LinkChainToCrmEnhanced for message {0}", message.Id);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - About to call LinkChainToCrmEnhanced for message {0}", message.Id);
                     
                     // Use the full LinkChainToCrm process like manual linking
                     LinkChainToCrmEnhanced(message.Id, contactsToLink, httpContextScheme);
-                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - Enhanced auto-linked message {0} to {1} CRM contact(s) with full functionality", message.Id, contactsToLink.Count);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - Enhanced auto-linked message {0} to {1} CRM contact(s) with full functionality", message.Id, contactsToLink.Count);
                 }
                 else
                 {
-                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrm - No CRM contacts found for message {0}, no linking performed", message.Id);
+                    Log.InfoFormat("DEBUG: ProcessIncomingEmailForCrmWebStudio - No CRM contacts found for message {0}, no linking performed", message.Id);
                 }
             }
             catch (Exception ex)
             {
-                Log.WarnFormat("ProcessIncomingEmailForCrm failed for message {0}: {1}", message.Id, ex.ToString());
+                Log.WarnFormat("ProcessIncomingEmailForCrmWebStudio failed for message {0}: {1}", message.Id, ex.ToString());
             }
+        }
+
+        /// <summary>
+        /// Legacy method for MailAggregator compatibility - does nothing to prevent duplication
+        /// Original functionality moved to ProcessIncomingEmailForCrmWebStudio
+        /// </summary>
+        public void ProcessIncomingEmailForCrm(MailMessageData message, MailBoxData mailbox, string httpContextScheme)
+        {
+            // Empty implementation to prevent MailAggregator from calling our enhanced logic
+            // This maintains the original method signature that MailAggregator expects
+            Log.InfoFormat("ProcessIncomingEmailForCrm (legacy) called for message {0} - ignored to prevent duplication", message.Id);
         }
 
         public void AddRelationshipEvents(MailMessageData message, string httpContextScheme = null)
