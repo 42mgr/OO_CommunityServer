@@ -1,0 +1,483 @@
+name: Build OnlyOffice .deb - Targeted ASC.Mail.dll Replacement
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      force_download:
+        description: 'Force download fresh .deb package'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  extract-original-deb:
+    runs-on: ubuntu-latest
+    outputs:
+      deb-cache-key: ${{ steps.cache-key.outputs.key }}
+    steps:
+    - name: Generate cache key for .deb
+      id: cache-key
+      run: |
+        # Create a cache key based on the week (updates weekly)
+        echo "key=onlyoffice-deb-extracted-$(date +%Y-W%U)" >> $GITHUB_OUTPUT
+        
+    - name: Check if extracted .deb is cached
+      id: cache-check
+      uses: actions/cache@v3
+      with:
+        path: deb-extracted
+        key: ${{ steps.cache-key.outputs.key }}
+        
+    - name: Download and extract original .deb
+      if: steps.cache-check.outputs.cache-hit != 'true' || github.event.inputs.force_download == 'true'
+      run: |
+        #!/bin/bash
+        set -e
+        
+        # ───────── CONFIG ─────────
+        KEY_URL="https://download.onlyoffice.com/repo/onlyoffice.key"
+        REPO_BASE_URL="https://download.onlyoffice.com/repo/debian"
+        DIST="squeeze"
+        ARCH="amd64"
+        PACKAGE="onlyoffice-communityserver"
+        
+        # Download .deb
+        echo "📦 Downloading original .deb package..."
+        WORK_DIR=$(mktemp -d)
+        curl -fsSL "$KEY_URL" | gpg --dearmor > "$WORK_DIR/onlyoffice.gpg"
+        
+        INDEX_URL="$REPO_BASE_URL/dists/$DIST/main/binary-$ARCH/Packages.gz"
+        curl -fsSL "$INDEX_URL" | gzip -d > "$WORK_DIR/Packages"
+        
+        DEB_URL=$(awk -v pkg="$PACKAGE" '
+          $1 == "Package:" && $2 == pkg {found=1}
+          found && $1 == "Filename:" { print $2; exit }
+        ' "$WORK_DIR/Packages")
+        
+        FULL_URL="$REPO_BASE_URL/$DEB_URL"
+        curl -fsSL -o original.deb "$FULL_URL"
+        
+        echo "✅ Downloaded original.deb"
+        ls -lh original.deb
+        
+        # Extract .deb
+        echo "📦 Extracting original .deb..."
+        mkdir -p deb-extracted
+        cd deb-extracted
+        dpkg-deb -R ../original.deb .
+        
+        echo "✅ Extraction complete"
+        
+        # Create metadata file
+        echo "📝 Creating metadata..."
+        cat > .metadata << EOF
+        Extracted-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        Original-URL: $FULL_URL
+        Package-Name: $PACKAGE
+        EOF
+        
+        # Show extraction summary
+        echo "📊 Extraction summary:"
+        find . -maxdepth 3 -type d | head -20
+        echo "Total files: $(find . -type f | wc -l)"
+        
+        # Cleanup
+        rm -f ../original.deb
+        
+    - name: Identify ASC.Mail.dll locations for replacement
+      run: |
+        echo "📋 Identifying ASC.Mail.dll locations in extracted package..."
+        
+        cd deb-extracted
+        
+        # List ASC.Mail.dll files (the ones we'll replace)
+        echo "📍 ASC.Mail.dll files to be replaced:"
+        find . -name "ASC.Mail.dll" -type f | while read -r dll_file; do
+          echo "  Target: $dll_file ($(stat -c%s "$dll_file") bytes)"
+        done
+        
+        # Keep other mail-related files intact
+        echo "📋 Other mail files (will be kept as-is):"
+        find . -name "ASC.Mail*.dll" ! -name "ASC.Mail.dll" -type f | head -5 | while read -r other_file; do
+          echo "  Keeping: $(basename "$other_file")"
+        done
+        
+        echo "✅ Package ready for targeted ASC.Mail.dll replacement"
+        
+    - name: Display cache status
+      run: |
+        if [ "${{ steps.cache-check.outputs.cache-hit }}" == "true" ] && [ "${{ github.event.inputs.force_download }}" != "true" ]; then
+          echo "✅ Using cached .deb extraction"
+          if [ -f deb-extracted/.metadata ]; then
+            echo "📋 Cache metadata:"
+            cat deb-extracted/.metadata
+          fi
+        else
+          echo "🔄 Fresh .deb download and extraction completed"
+        fi
+        
+    - name: Upload extracted .deb
+      uses: actions/upload-artifact@v4
+      with:
+        name: deb-extracted
+        path: deb-extracted/
+        retention-days: 1
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Fetch all history
+        
+    - name: Show git status
+      run: |
+        Write-Host "📍 Current branch and commit info:"
+        git branch -v
+        git log -1 --oneline
+        Write-Host "`n📋 Git status:"
+        git status
+        Write-Host "`n🔍 Recent commits:"
+        git log -5 --oneline
+      
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 'lts/*'
+        
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.3.1
+      
+    - name: Set up .NET SDK
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '5.0'
+        
+    - name: Targeted cleanup for fresh ASC.Mail.dll build
+      run: |
+        Write-Host "🧹 Targeted cleanup for fresh ASC.Mail.dll compilation..."
+        
+        # Only clean the specific mail project directories
+        Write-Host "Cleaning ASC.Mail project build outputs..."
+        if (Test-Path "module/ASC.Mail/ASC.Mail/bin") { 
+          Remove-Item "module/ASC.Mail/ASC.Mail/bin" -Recurse -Force -ErrorAction SilentlyContinue 
+          Write-Host "  ✅ Removed module/ASC.Mail/ASC.Mail/bin"
+        }
+        if (Test-Path "module/ASC.Mail/ASC.Mail/obj") { 
+          Remove-Item "module/ASC.Mail/ASC.Mail/obj" -Recurse -Force -ErrorAction SilentlyContinue 
+          Write-Host "  ✅ Removed module/ASC.Mail/ASC.Mail/obj"
+        }
+        
+        # Only remove ASC.Mail.dll from build/deploy directories (not other mail DLLs)
+        Write-Host "Removing only ASC.Mail.dll from build directories..."
+        Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -Path "build" -ErrorAction SilentlyContinue | 
+          ForEach-Object { 
+            Write-Host "  Removing: $($_.FullName)"
+            Remove-Item $_ -Force -ErrorAction SilentlyContinue 
+          }
+        
+        # Clear only HTTP cache to force fresh package downloads, keep package cache for efficiency
+        Write-Host "Clearing NuGet HTTP cache (keeping package cache for efficiency)..."
+        try {
+          nuget locals http-cache -clear
+          Write-Host "  ✅ NuGet HTTP cache cleared"
+        } catch {
+          Write-Host "  ⚠️ NuGet cache clear failed, continuing anyway"
+        }
+        
+        Write-Host "✅ Targeted cleanup complete - other components preserved"
+        
+    - name: Restore NuGet packages
+      run: |
+        Write-Host "📦 Restoring NuGet packages..."
+        nuget restore -ForceEnglishOutput -Verbosity quiet
+        
+    - name: Build solution with clean ASC.Mail.dll
+      run: |
+        Write-Host "🔨 Building solution to generate fresh ASC.Mail.dll..."
+        # Clean only if needed, then build
+        msbuild build/msbuild/build.proj /p:Configuration=Release /flp:LogFile=Build.log /verbosity:minimal /nologo
+        
+    - name: Deploy solution
+      run: |
+        Write-Host "🚀 Deploying solution..."
+        msbuild build/msbuild/deploy.proj /p:Configuration=Release /flp:LogFile=Deploy.log /verbosity:minimal /nologo
+        
+    - name: Verify custom ASC.Mail.dll
+      run: |
+        Write-Host "🔍 Verifying custom ASC.Mail.dll..."
+        
+        # Find the built ASC.Mail.dll
+        $mailDll = Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.FullName -like "*deploy*" -or $_.FullName -like "*Release*" } |
+                   Sort-Object LastWriteTime -Descending |
+                   Select-Object -First 1
+        
+        if (-not $mailDll) {
+          $mailDll = Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -ErrorAction SilentlyContinue | 
+                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        }
+        
+        if ($mailDll) {
+          Write-Host "📍 Found ASC.Mail.dll: $($mailDll.FullName)"
+          Write-Host "📅 Built: $($mailDll.LastWriteTime)"
+          Write-Host "📏 Size: $($mailDll.Length) bytes"
+          
+          # Check for duplication issue
+          $hasOldCode = Select-String -Path $mailDll.FullName -Pattern "ProcessIncomingEmailForCrm" -Quiet
+          
+          if ($hasOldCode) {
+            Write-Host "❌ WARNING: Duplication code 'ProcessIncomingEmailForCrm' still present"
+            Write-Host "❌ This may cause email duplication issues"
+          } else {
+            Write-Host "✅ SUCCESS: No 'ProcessIncomingEmailForCrm' duplication code found"
+          }
+          
+          # Check for CRM services
+          $hasCrmService = Select-String -Path $mailDll.FullName -Pattern "WebCrmMonitoringService|CrmEmailAutoLinkService" -Quiet
+          if ($hasCrmService) {
+            Write-Host "✅ CRM auto-linking services detected"
+          } else {
+            Write-Host "⚠️ CRM auto-linking services not detected"
+          }
+          
+        } else {
+          Write-Host "❌ ASC.Mail.dll not found after build"
+          throw "Build failed: ASC.Mail.dll missing"
+        }
+        
+    - name: Collect custom ASC.Mail.dll
+      run: |
+        Write-Host "📦 Collecting custom ASC.Mail.dll..."
+        
+        # Create directory for the custom DLL
+        New-Item -ItemType Directory -Force -Path "custom-mail-dll"
+        
+        # Find and collect only ASC.Mail.dll (not other mail DLLs)
+        $mailDll = Get-ChildItem -Recurse -Filter "ASC.Mail.dll" -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.Directory.Name -like "*Release*" -or $_.Directory.Name -eq "bin" } |
+                   Select-Object -First 1
+        
+        if ($mailDll) {
+          Write-Host "✅ Collecting: $($mailDll.FullName)"
+          Copy-Item $mailDll.FullName "custom-mail-dll/ASC.Mail.dll"
+          
+          # Show file details
+          $fileInfo = Get-Item "custom-mail-dll/ASC.Mail.dll"
+          Write-Host "📏 Size: $($fileInfo.Length) bytes"
+          Write-Host "📅 Modified: $($fileInfo.LastWriteTime)"
+        } else {
+          Write-Host "❌ ASC.Mail.dll not found for collection"
+          throw "Collection failed: ASC.Mail.dll missing"
+        }
+        
+        # Optionally collect XML documentation
+        $xmlFile = Get-ChildItem -Recurse -Filter "ASC.Mail.xml" -ErrorAction SilentlyContinue | 
+                   Where-Object { $_.Directory.Name -like "*Release*" -or $_.Directory.Name -eq "bin" } |
+                   Select-Object -First 1
+        
+        if ($xmlFile) {
+          Copy-Item $xmlFile.FullName "custom-mail-dll/ASC.Mail.xml"
+          Write-Host "✅ Also collected: ASC.Mail.xml"
+        }
+        
+        Write-Host "`n📊 Custom ASC.Mail.dll ready:"
+        Get-ChildItem "custom-mail-dll" | Format-Table Name, Length, LastWriteTime -AutoSize
+        
+    - name: Upload custom ASC.Mail.dll
+      uses: actions/upload-artifact@v4
+      with:
+        name: custom-mail-dll
+        path: custom-mail-dll/
+        retention-days: 1
+
+  create-complete-deb:
+    needs: [extract-original-deb, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download extracted .deb
+      uses: actions/download-artifact@v4
+      with:
+        name: deb-extracted
+        path: deb-contents/
+        
+    - name: Download custom ASC.Mail.dll
+      uses: actions/download-artifact@v4
+      with:
+        name: custom-mail-dll
+        path: custom-mail-dll/
+        
+    - name: Display replacement context
+      run: |
+        echo "📋 ASC.Mail.dll Replacement Context:"
+        echo ""
+        echo "Custom ASC.Mail.dll to inject:"
+        ls -la custom-mail-dll/
+        echo ""
+        echo "Target locations in package:"
+        find deb-contents -name "ASC.Mail.dll" -type f -exec ls -la {} \;
+        
+    - name: Replace only ASC.Mail.dll
+      run: |
+        echo "🔄 Replacing ASC.Mail.dll (preserving all other files)..."
+        
+        cd deb-contents
+        
+        # Only replace ASC.Mail.dll files, leave everything else intact
+        if [ -f "../custom-mail-dll/ASC.Mail.dll" ]; then
+          find . -name "ASC.Mail.dll" -type f | while read -r target; do
+            echo "📍 Original: $target ($(stat -c%s "$target") bytes)"
+            echo "🔄 Replacing with custom ASC.Mail.dll ($(stat -c%s "../custom-mail-dll/ASC.Mail.dll") bytes)"
+            
+            # Backup original for reference
+            cp "$target" "${target}.original"
+            
+            # Replace with custom version
+            cp "../custom-mail-dll/ASC.Mail.dll" "$target"
+            
+            # Preserve original permissions
+            chmod --reference="${target}.original" "$target" 2>/dev/null || true
+            
+            echo "✅ Replaced: $target"
+          done
+          
+          # Also replace XML if available
+          if [ -f "../custom-mail-dll/ASC.Mail.xml" ]; then
+            find . -name "ASC.Mail.xml" -type f | while read -r xml_target; do
+              echo "📄 Replacing: $xml_target"
+              cp "../custom-mail-dll/ASC.Mail.xml" "$xml_target"
+            done
+          fi
+          
+        else
+          echo "❌ Custom ASC.Mail.dll not found"
+          exit 1
+        fi
+        
+        echo "✅ ASC.Mail.dll replacement complete (all other mail components preserved)"
+        
+    - name: Verify replacement
+      run: |
+        echo "🔍 Verifying ASC.Mail.dll replacement..."
+        
+        cd deb-contents
+        
+        # Check each replaced ASC.Mail.dll
+        find . -name "ASC.Mail.dll" -type f | while read -r dll_file; do
+          echo "📍 Checking: $dll_file"
+          echo "  Size: $(stat -c%s "$dll_file") bytes"
+          
+          # Basic verification that it's our custom version
+          if [ "$(stat -c%s "$dll_file")" = "$(stat -c%s "../custom-mail-dll/ASC.Mail.dll")" ]; then
+            echo "  ✅ Size matches custom DLL"
+          else
+            echo "  ❌ Size mismatch - replacement may have failed"
+          fi
+        done
+        
+        echo "✅ Replacement verification complete"
+        
+    - name: Update package metadata
+      run: |
+        cd deb-contents
+        
+        if [ -f DEBIAN/control ]; then
+          # Get original version
+          ORIG_VERSION=$(grep "^Version:" DEBIAN/control | cut -d' ' -f2)
+          NEW_VERSION="${ORIG_VERSION}-mail-custom-$(date +%Y%m%d)"
+          
+          echo "📝 Updating version from $ORIG_VERSION to $NEW_VERSION"
+          
+          # Update control file
+          cat > DEBIAN/control << EOF
+        Package: onlyoffice-communityserver
+        Version: $NEW_VERSION
+        Architecture: all
+        Maintainer: Ascensio System SIA
+        Installed-Size: 1634637
+        Depends: debconf (>= 0.5) | debconf-2.0, mysql-server, mysql-client, mono-complete (>= 6.0), ca-certificates-mono, nginx (>= 1.9.5) | nginx-extras (>= 1.9.5), mono-webserver-hyperfastcgi, nodejs (>= 14.18.0), python3-pip, elasticsearch (= 7.16.3), redis-server, ffmpeg, dotnet-sdk-7.0
+        Recommends: ruby-god
+        Section: web
+        Priority: optional
+        Description: Community Server with custom ASC.Mail.dll (CRM Auto-Linking)
+        X-Custom-Build: true
+        X-Build-Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+        X-Modified-Components: ASC.Mail.dll only (targeted replacement)
+        EOF
+          
+          echo "📋 Updated control file for targeted replacement"
+        fi
+        
+    - name: Build final .deb package
+      run: |
+        echo "📦 Building final .deb with custom ASC.Mail.dll..."
+        
+        # Fix permissions
+        find deb-contents -type d -exec chmod 755 {} \;
+        find deb-contents/DEBIAN -type f -exec chmod 644 {} \;
+        
+        # Make maintainer scripts executable
+        [ -f deb-contents/DEBIAN/postinst ] && chmod 755 deb-contents/DEBIAN/postinst
+        [ -f deb-contents/DEBIAN/preinst ] && chmod 755 deb-contents/DEBIAN/preinst
+        [ -f deb-contents/DEBIAN/postrm ] && chmod 755 deb-contents/DEBIAN/postrm
+        [ -f deb-contents/DEBIAN/prerm ] && chmod 755 deb-contents/DEBIAN/prerm
+        [ -f deb-contents/DEBIAN/config ] && chmod 755 deb-contents/DEBIAN/config
+        [ -f deb-contents/DEBIAN/templates ] && chmod 644 deb-contents/DEBIAN/templates
+        
+        # Build package
+        dpkg-deb -b deb-contents onlyoffice-communityserver-mail-custom.deb
+        
+        echo "✅ Package with custom ASC.Mail.dll built successfully"
+        ls -lh onlyoffice-communityserver-mail-custom.deb
+        
+        # Verify package
+        dpkg-deb -I onlyoffice-communityserver-mail-custom.deb
+        
+    - name: Upload custom package
+      uses: actions/upload-artifact@v4
+      with:
+        name: onlyoffice-mail-custom-deb
+        path: onlyoffice-communityserver-mail-custom.deb
+        retention-days: 4
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: mail-custom-1.0.${{ github.run_number }}
+        name: Custom ASC.Mail.dll Build ${{ github.run_number }}
+        body: |
+          📧 **OnlyOffice with Custom ASC.Mail.dll**
+          
+          **Targeted Replacement:**
+          - Only ASC.Mail.dll replaced with custom version
+          - All other mail components (ASC.Mail.Core.dll, etc.) preserved from original
+          - Minimal impact, focused changes only
+          
+          **Features:**
+          - Custom CRM Email Auto-Linking functionality
+          - WebCrmMonitoringService and CrmEmailAutoLinkService
+          - Background email processing with contact matching
+        files: onlyoffice-communityserver-mail-custom.deb
+
+    - uses: dev-drprasad/delete-older-releases@v0.3.4
+      with:
+        repo: ${{ github.repository }}
+        keep_latest: 3
+        delete_tag_pattern: mail-custom-
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Trigger Target Workflow
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.PAT_TOKEN }}
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: '42mgr',
+            repo: 'OO_Docker-CommunityServer',
+            workflow_id: 'build-docker.yml',
+            ref: 'master'
+          })
