@@ -1,7 +1,7 @@
 /*
  *
  * (c) Copyright Ascensio System Limited 2010-2023
- * Updated: Force rebuild to eliminate email duplication
+ * Updated: Use simple MarkChainAsCrmLinked to prevent GetMessage() duplication
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -405,13 +405,46 @@ namespace ASC.Mail.Core.Engine
         {
             Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Starting enhanced linking for message {0} with {1} contacts", messageId, contactIds.Count);
             
-            // Enhanced automatic linking that works like manual process
-            // but with permission-safe checks instead of strict demands
+            // Step 1: Validate CRM contact permissions
+            var accessibleContacts = ValidateCrmContactPermissions(contactIds);
+            if (!accessibleContacts.Any())
+            {
+                Log.InfoFormat("No accessible CRM contacts found for message {0}, skipping enhanced linking", messageId);
+                return;
+            }
+
+            using (var daoFactory = new DaoFactory())
+            {
+                var db = daoFactory.DbManager;
+                var daoMail = daoFactory.CreateMailDao(Tenant, User);
+                var mail = daoMail.GetMail(new ConcreteUserMessageExp(messageId, Tenant, User));
+                var daoCrmLink = daoFactory.CreateCrmLinkDao(Tenant, User);
+
+                Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Starting transaction for chain {0} with {1} contacts", mail.ChainId, accessibleContacts.Count);
+                
+                // Step 2: Save CRM links in simple transaction first
+                using (var tx = db.BeginTransaction(IsolationLevel.ReadUncommitted))
+                {
+                    daoCrmLink.SaveCrmLinks(mail.ChainId, mail.MailboxId, accessibleContacts);
+                    tx.Commit();
+                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - CRM links saved successfully for chain {0}", mail.ChainId);
+                }
+
+                // Step 3: Create relationship events for the ORIGINAL message only (avoid loading entire chain)
+                CreateRelationshipEventForOriginalMessage(messageId, accessibleContacts, httpContextScheme);
+            }
+        }
+
+        /// <summary>
+        /// Validate CRM contact permissions without side effects
+        /// </summary>
+        private List<CrmContactData> ValidateCrmContactPermissions(List<CrmContactData> contactIds)
+        {
+            var accessibleContacts = new List<CrmContactData>();
+            
             using (var scope = DIHelper.Resolve())
             {
-                Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - DIHelper scope resolved, checking contact permissions");
                 var factory = scope.Resolve<CRM.Core.Dao.DaoFactory>();
-                var accessibleContacts = new List<CrmContactData>();
                 
                 foreach (var crmContactEntity in contactIds)
                 {
@@ -459,90 +492,40 @@ namespace ASC.Mail.Core.Engine
                         Log.WarnFormat("Failed to check access to CRM entity {0} type {1}: {2}", crmContactEntity.Id, crmContactEntity.Type, ex.Message);
                     }
                 }
-
-                if (!accessibleContacts.Any())
-                {
-                    Log.InfoFormat("No accessible CRM contacts found for message {0}, skipping enhanced linking", messageId);
-                    return;
-                }
             }
+            
+            return accessibleContacts;
+        }
 
-            using (var daoFactory = new DaoFactory())
+        /// <summary>
+        /// Create relationship event for the original message only (not entire chain)
+        /// This reduces the risk of duplication while maintaining CRM functionality
+        /// </summary>
+        private void CreateRelationshipEventForOriginalMessage(int messageId, List<CrmContactData> contactIds, string httpContextScheme)
+        {
+            try
             {
-                var db = daoFactory.DbManager;
-
-                var daoMail = daoFactory.CreateMailDao(Tenant, User);
-
-                var mail = daoMail.GetMail(new ConcreteUserMessageExp(messageId, Tenant, User));
-
-                var daoMailInfo = daoFactory.CreateMailInfoDao(Tenant, User);
-
-                var chainedMessages = daoMailInfo.GetMailInfoList(
-                    SimpleMessagesExp.CreateBuilder(Tenant, User)
-                        .SetChainId(mail.ChainId)
-                        .Build());
-
-                if (!chainedMessages.Any())
-                    return;
-
-                var linkingMessages = new List<MailMessageData>();
-
-                var engine = new EngineFactory(Tenant, User);
-
-                foreach (var chainedMessage in chainedMessages)
-                {
-                    var messageOptions = new MailMessageData.Options();
-                    messageOptions.LoadImages = true;
-                    messageOptions.LoadBody = true;
-                    messageOptions.NeedProxyHttp = false;
-                    
-                    var message = engine.MessageEngine.GetMessage(chainedMessage.Id, messageOptions);
-
-                    message.LinkedCrmEntityIds = contactIds;
-
-                    linkingMessages.Add(message);
-                }
-
-                var daoCrmLink = daoFactory.CreateCrmLinkDao(Tenant, User);
-
-                Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - About to begin database transaction for chain {0} with {1} contacts", mail.ChainId, contactIds.Count);
+                Log.InfoFormat("DEBUG: Creating relationship event for original message {0} with {1} contacts", messageId, contactIds.Count);
                 
-                using (var tx = db.BeginTransaction(IsolationLevel.ReadUncommitted))
-                {
-                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Transaction started, calling SaveCrmLinks for chain {0}, mailbox {1}", mail.ChainId, mail.MailboxId);
-                    
-                    daoCrmLink.SaveCrmLinks(mail.ChainId, mail.MailboxId, contactIds);
-                    
-                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - SaveCrmLinks completed successfully, processing {0} messages for relationship events", linkingMessages.Count);
-
-                    foreach (var message in linkingMessages)
-                    {
-                        try
-                        {
-                            Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Adding relationship events for message {0}", message.Id);
-                            // This uploads attachments and creates full relationship events
-                            AddRelationshipEvents(message, httpContextScheme);
-                            Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Successfully added relationship events for message {0}", message.Id);
-                        }
-                        catch (ApiHelperException ex)
-                        {
-                            if (!ex.Message.Equals("Already exists"))
-                            {
-                                Log.WarnFormat("DEBUG: LinkChainToCrmEnhanced - ApiHelperException for message {0}: {1}", message.Id, ex.Message);
-                                // Don't throw - continue with other messages
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.WarnFormat("DEBUG: LinkChainToCrmEnhanced - Unexpected error adding relationship events for message {0}: {1}", message.Id, ex.Message);
-                            // Don't throw - continue with other messages
-                        }
-                    }
-
-                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - About to commit transaction for chain {0}", mail.ChainId);
-                    tx.Commit();
-                    Log.InfoFormat("DEBUG: LinkChainToCrmEnhanced - Transaction committed successfully for chain {0} with {1} CRM entities", mail.ChainId, contactIds.Count);
-                }
+                var engine = new EngineFactory(Tenant, User);
+                
+                // Use minimal options to reduce side effects but still get attachments
+                var messageOptions = new MailMessageData.Options();
+                messageOptions.LoadImages = false;     // Don't load images 
+                messageOptions.LoadBody = true;       // Load body for relationship event
+                messageOptions.NeedProxyHttp = false; // No HTTP proxy needed
+                
+                var message = engine.MessageEngine.GetMessage(messageId, messageOptions);
+                message.LinkedCrmEntityIds = contactIds;
+                
+                // Create relationship events with attachments
+                AddRelationshipEvents(message, httpContextScheme);
+                
+                Log.InfoFormat("DEBUG: Successfully created relationship event for message {0}", messageId);
+            }
+            catch (Exception ex)
+            {
+                Log.WarnFormat("Error creating relationship event for message {0}: {1}", messageId, ex.Message);
             }
         }
     }

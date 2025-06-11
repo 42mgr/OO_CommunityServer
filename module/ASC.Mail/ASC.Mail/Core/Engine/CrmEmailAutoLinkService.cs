@@ -248,7 +248,7 @@ namespace ASC.Mail.Core.Engine
                 {
                     Log.Info($"🎯 CrmEmailAutoLinkService: Found {contactsToLink.Count} CRM contacts for email {message.Id}");
 
-                    // Use the full enhanced linking process that creates relationship events and shows in interface
+                    // Use enhanced CRM linking with duplication fix
                     crmEngine.LinkChainToCrmEnhanced(message.Id, contactsToLink, HttpContext.Current?.Request?.Url?.Scheme ?? "http");
 
                     Log.Info($"✅ CrmEmailAutoLinkService: Successfully auto-linked email {message.Id} to {contactsToLink.Count} CRM contacts");

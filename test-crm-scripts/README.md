@@ -123,6 +123,91 @@ chmod +x test-crm-autolink.sh
 4. **Monitor runtime:** Use `enhanced-runtime-crm-monitor.sh` during testing
 5. **Debug issues:** Use SQL diagnostic scripts if problems are found
 
+## Streamlined Diagnostic Process
+
+**When user says "run your diagnostics", follow this efficient process:**
+
+### 1. Quick DLL Verification (Check if fix was deployed)
+```bash
+# Check MailAggregator DLL timestamp
+docker exec onlyoffice-community-server stat -c "%Y %n" /var/www/onlyoffice/Services/MailAggregator/ASC.Mail.Core.dll
+
+# Check for our fix markers in MailAggregator
+docker exec onlyoffice-community-server bash -c "strings /var/www/onlyoffice/Services/MailAggregator/ASC.Mail.Core.dll | grep -A3 'Force COMPLETE rebuild'"
+```
+
+### 2. Email Duplication Check (Core diagnostic)
+```bash
+# Check recent emails for duplication patterns
+docker exec onlyoffice-community-server mysql -u root -pmy-secret-pw -e "
+USE onlyoffice; 
+SELECT id, folder, from_text, to_text, date_received 
+FROM mail_mail 
+WHERE id >= (SELECT MAX(id) - 10 FROM mail_mail) 
+ORDER BY id DESC LIMIT 10;"
+
+# Check CRM contact emails specifically (mgrafde@gmail.com = contact 1004)
+docker exec onlyoffice-community-server mysql -u root -pmy-secret-pw -e "
+USE onlyoffice; 
+SELECT id, folder, from_text, to_text, date_received 
+FROM mail_mail 
+WHERE (from_text LIKE '%mgrafde@gmail.com%' OR to_text LIKE '%mgrafde@gmail.com%') 
+AND date_received >= DATE_SUB(NOW(), INTERVAL 1 HOUR) 
+ORDER BY date_received DESC;"
+
+# Count emails by folder in last hour
+docker exec onlyoffice-community-server mysql -u root -pmy-secret-pw -e "
+USE onlyoffice; 
+SELECT COUNT(*) as total_emails, 
+       COUNT(CASE WHEN folder = 1 THEN 1 END) as inbox_count, 
+       COUNT(CASE WHEN folder = 2 THEN 1 END) as sent_count 
+FROM mail_mail 
+WHERE date_received >= DATE_SUB(NOW(), INTERVAL 1 HOUR);"
+```
+
+### 3. Interpretation Guidelines
+
+**✅ FIX WORKING:** 
+- CRM emails (mgrafde@gmail.com) appear only in folder 1 (inbox) OR folder 2 (sent), not both
+- No duplicate email IDs for same timestamp
+
+**❌ FIX NOT WORKING:**
+- CRM emails appear in BOTH folder 1 (inbox) AND folder 2 (sent) 
+- Duplicate email IDs with same content but different folders
+
+**🔧 BUILD ISSUE:**
+- MailAggregator DLL timestamp is old
+- No "Force COMPLETE rebuild" marker in MailAggregator
+- Need to trigger complete rebuild and redeploy
+
+**🎯 ROOT CAUSE DISCOVERED:**
+- External emails (mgrafde@gmail.com → mgrafch@gmail.com) trigger our CrmEmailAutoLinkService
+- Our LinkChainToCrmEnhanced() calls `engine.MessageEngine.GetMessage()` (line 499)
+- MessageEngine.GetMessage() has side effects that create duplicate in Sent folder
+- This explains why only CRM-matched emails duplicate - they're the only ones processed by our code!
+
+**✅ FINAL SOLUTION IMPLEMENTED:**
+- Replaced `LinkChainToCrmEnhanced()` with `MarkChainAsCrmLinked()`
+- MarkChainAsCrmLinked() only saves database links (no message loading)
+- Eliminates GetMessage() calls that cause duplication
+- Emails still appear in CRM interface properly linked
+- Much simpler and safer approach for auto-linking
+
+### 4. Log Analysis (If needed)
+```bash
+# Check for our legacy stub being called
+docker logs onlyoffice-community-server --since 30m | grep -i "legacy.*called.*ignored"
+
+# Check for CRM processing logs
+docker logs onlyoffice-community-server --since 30m | grep -i "CrmLinkEngine\|ProcessIncomingEmailForCrm"
+```
+
+This streamlined process takes ~2 minutes and immediately shows:
+1. Whether the fix was deployed
+2. Whether duplication is still occurring  
+3. Which emails are affected
+4. Next steps needed
+
 ## Current Status Summary (Jun 11, 2025)
 
 ### ✅ What's Working:
