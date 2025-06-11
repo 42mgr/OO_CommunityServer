@@ -43,8 +43,8 @@ namespace ASC.Mail.Core.Engine
 
                 Log.Info("🚀 CrmEmailAutoLinkService: Starting CRM email auto-linking service...");
 
-                // Start monitoring every 30 seconds
-                _monitoringTimer = new Timer(ProcessNewEmails, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+                // Start monitoring every 60 seconds with 2-minute delay to avoid conflicts with MailAggregator
+                _monitoringTimer = new Timer(ProcessNewEmails, null, TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(60));
 
                 Log.Info("✅ CrmEmailAutoLinkService: Auto-linking service started successfully");
             }
@@ -136,6 +136,7 @@ namespace ASC.Mail.Core.Engine
                         WHERE m.tenant = @tenant 
                         AND m.date_received >= @lastProcessed 
                         AND m.date_received <= @now
+                        AND m.date_received < DATE_SUB(NOW(), INTERVAL 30 SECOND)
                         AND m.folder IN (1, 2)
                         AND l.id_chain IS NULL
                         ORDER BY m.date_received DESC
@@ -163,13 +164,14 @@ namespace ASC.Mail.Core.Engine
                             // Set security context for the email owner
                             SecurityContext.AuthenticateMe(new Guid(mailInfo.UserId));
 
-                            var engine = new EngineFactory(tenantId, mailInfo.UserId);
-                            var message = engine.MessageEngine.GetMessage(mailInfo.Id, new MailMessageData.Options
+                            // Create a minimal message object from database info to avoid conflicts with MailAggregator
+                            var message = new MailMessageData
                             {
-                                LoadImages = false,
-                                LoadBody = false,
-                                NeedProxyHttp = false
-                            });
+                                Id = mailInfo.Id,
+                                From = mailInfo.From,
+                                To = mailInfo.To,
+                                Cc = mailInfo.Cc
+                            };
 
                             if (ProcessEmailForCrmAutoLinking(message, tenantId, mailInfo.UserId))
                             {

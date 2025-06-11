@@ -34,8 +34,11 @@ namespace ASC.Mail.Core.Engine
                 
                 Log.Info("Starting WebCrmMonitoringService...");
                 
-                // Start timer to trigger CRM auto-linking every 60 seconds
-                _monitoringTimer = new Timer(TriggerCrmAutoLinking, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60));
+                // Start the CRM auto-linking service once
+                CrmEmailAutoLinkService.Start();
+                
+                // Set up status monitoring (no repeated triggering needed)
+                _monitoringTimer = new Timer(MonitorStatus, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(5));
                 _isRunning = true;
                 
                 Log.Info("WebCrmMonitoringService started successfully");
@@ -60,6 +63,9 @@ namespace ASC.Mail.Core.Engine
                     _monitoringTimer = null;
                 }
                 
+                // Stop the underlying CRM service too
+                CrmEmailAutoLinkService.Stop();
+                
                 _isRunning = false;
                 
                 Log.Info("WebCrmMonitoringService stopped successfully");
@@ -71,7 +77,7 @@ namespace ASC.Mail.Core.Engine
             return _isRunning ? "Running" : "Stopped";
         }
         
-        private static void TriggerCrmAutoLinking(object state)
+        private static void MonitorStatus(object state)
         {
             try
             {
@@ -79,24 +85,15 @@ namespace ASC.Mail.Core.Engine
                 {
                     if (!_isRunning) return;
                     
-                    Log.DebugFormat("WebCrmMonitoringService: Triggering CRM auto-linking process");
+                    Log.DebugFormat("WebCrmMonitoringService: Monitoring CRM auto-linking service status");
                     
-                    // Use the existing CrmEmailAutoLinkService to process emails
-                    // This service already has all the database access and logic
-                    try
-                    {
-                        CrmEmailAutoLinkService.Start();
-                        Log.DebugFormat("WebCrmMonitoringService: CRM auto-linking process triggered successfully");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.WarnFormat("WebCrmMonitoringService: Failed to start CrmEmailAutoLinkService: {0}", ex.Message);
-                    }
+                    // Just log status - the service runs independently now
+                    Log.DebugFormat("WebCrmMonitoringService: Service is running and monitoring emails");
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorFormat("WebCrmMonitoringService: Error in TriggerCrmAutoLinking: {0}", ex.Message);
+                Log.ErrorFormat("WebCrmMonitoringService: Error in MonitorStatus: {0}", ex.Message);
             }
         }
     }
