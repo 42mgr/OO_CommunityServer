@@ -27,8 +27,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Feed", "module\ASC.Feed
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Api.Client", "module\ASC.Api\ASC.Api.Client\ASC.Api.Client.csproj", "{012B11CA-B298-404A-8923-978903CDFC25}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Thrdparty", "module\ASC.Thrdparty\ASC.Thrdparty\ASC.Thrdparty.csproj", "{592EAC85-6CFC-4AD7-B653-3EADAA18327E}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.FederatedLogin", "module\ASC.Thrdparty\ASC.FederatedLogin\ASC.FederatedLogin.csproj", "{481B0D9C-B2F8-4DE9-8597-BA8D24585099}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Api.Core", "module\ASC.Api\ASC.Api\ASC.Api.Core.csproj", "{49F07FFF-98A5-47D2-A9E9-A46B98C41245}"
@@ -66,14 +64,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Web.People", "web\studio\ASC.Web.Studio\Products\People\ASC.Web.People.csproj", "{7EA1E14F-FC71-48A7-9786-1FB0CD9EC1CD}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Web.Sample", "web\studio\ASC.Web.Studio\Products\Sample\ASC.Web.Sample.csproj", "{1AE21BB5-267C-443E-852E-1753AC1BD04D}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Mail.Aggregator.CollectionService", "module\ASC.Mail\Services\ASC.Mail.Aggregator.CollectionService\ASC.Mail.Aggregator.CollectionService.csproj", "{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Mail.Watchdog.Service", "module\ASC.Mail\Services\ASC.Mail.Watchdog.Service\ASC.Mail.Watchdog.Service.csproj", "{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Mail.EmlDownloader", "module\ASC.Mail\Services\ASC.Mail.EmlDownloader\ASC.Mail.EmlDownloader.csproj", "{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Mail.StorageCleaner.Service", "module\ASC.Mail\Services\ASC.Mail.StorageCleaner\ASC.Mail.StorageCleaner.Service.csproj", "{2559E5C4-4803-4A11-B9EC-33ECAD06C935}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ASC.Web.Mail", "web\studio\ASC.Web.Studio\addons\mail\ASC.Web.Mail.csproj", "{1EF9C7D8-F92E-48B3-9A86-78E431ABC306}"
 EndProject
@@ -215,12 +205,6 @@ Global
 		{012B11CA-B298-404A-8923-978903CDFC25}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
 		{012B11CA-B298-404A-8923-978903CDFC25}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{012B11CA-B298-404A-8923-978903CDFC25}.Release|Any CPU.Build.0 = Release|Any CPU
-		{592EAC85-6CFC-4AD7-B653-3EADAA18327E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{592EAC85-6CFC-4AD7-B653-3EADAA18327E}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{592EAC85-6CFC-4AD7-B653-3EADAA18327E}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
-		{592EAC85-6CFC-4AD7-B653-3EADAA18327E}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
-		{592EAC85-6CFC-4AD7-B653-3EADAA18327E}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{592EAC85-6CFC-4AD7-B653-3EADAA18327E}.Release|Any CPU.Build.0 = Release|Any CPU
 		{481B0D9C-B2F8-4DE9-8597-BA8D24585099}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{481B0D9C-B2F8-4DE9-8597-BA8D24585099}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{481B0D9C-B2F8-4DE9-8597-BA8D24585099}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
@@ -335,30 +319,6 @@ Global
 		{1AE21BB5-267C-443E-852E-1753AC1BD04D}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
 		{1AE21BB5-267C-443E-852E-1753AC1BD04D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1AE21BB5-267C-443E-852E-1753AC1BD04D}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
-		{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
-		{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2EBFAA3E-AF1D-4A30-B16A-4E8AE053E063}.Release|Any CPU.Build.0 = Release|Any CPU
-		{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
-		{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
-		{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F72B7F19-9A9B-41F1-AEA9-ADE70D3D8D19}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
-		{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
-		{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0C0B3474-9991-4ADC-BF4B-7A4F35EB5A7C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2559E5C4-4803-4A11-B9EC-33ECAD06C935}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2559E5C4-4803-4A11-B9EC-33ECAD06C935}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2559E5C4-4803-4A11-B9EC-33ECAD06C935}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
-		{2559E5C4-4803-4A11-B9EC-33ECAD06C935}.MvcOnly|Any CPU.Build.0 = Release|Any CPU
-		{2559E5C4-4803-4A11-B9EC-33ECAD06C935}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2559E5C4-4803-4A11-B9EC-33ECAD06C935}.Release|Any CPU.Build.0 = Release|Any CPU
 		{1EF9C7D8-F92E-48B3-9A86-78E431ABC306}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{1EF9C7D8-F92E-48B3-9A86-78E431ABC306}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1EF9C7D8-F92E-48B3-9A86-78E431ABC306}.MvcOnly|Any CPU.ActiveCfg = Release|Any CPU
