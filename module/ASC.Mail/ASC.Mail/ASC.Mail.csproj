@@ -432,6 +432,7 @@
     <Compile Include="Utils\CryptoUtil.cs" />
     <Compile Include="Utils\EncodingTools.cs" />
     <Compile Include="Utils\HtmlSanitizer.cs" />
+    <Compile Include="Utils\MailAddressHelper.cs" />
     <Compile Include="Utils\MailUtil.cs" />
     <Compile Include="Utils\MimeTypeMap.cs" />
     <Compile Include="Utils\Parser.cs" />
